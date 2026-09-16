@@ -18,20 +18,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+namespace satellite {
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+/// Registers "satellite_source": one unified receiver with a protocol dropdown, rather than
+/// separate NDI and OMT source types. Switching protocol rebuilds the receiver in place, so
+/// the scene item survives.
+void register_satellite_source();
 
-extern const char *PLUGIN_NAME;
-extern const char *PLUGIN_VERSION;
-
-void obs_log(int log_level, const char *format, ...);
-
-#ifdef __cplusplus
-}
-#endif
+} // namespace satellite

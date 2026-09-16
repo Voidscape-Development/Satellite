@@ -18,20 +18,21 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "transport/transport.hpp"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+#include <memory>
+#include <string>
+#include <vector>
 
-extern const char *PLUGIN_NAME;
-extern const char *PLUGIN_VERSION;
+namespace satellite {
 
-void obs_log(int log_level, const char *format, ...);
+/// Where libomt is expected to live, in search order.
+///
+/// Unlike NDI, OMT is MIT-licensed, so Satellite bundles libomt and libvmx alongside the
+/// plugin binary and looks there first. A system-wide install is still honoured as a
+/// fallback for users who build OMT themselves.
+std::vector<std::string> omt_runtime_candidates();
 
-#ifdef __cplusplus
-}
-#endif
+std::unique_ptr<IBackend> create_omt_backend();
+
+} // namespace satellite

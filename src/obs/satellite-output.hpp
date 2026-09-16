@@ -18,20 +18,17 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+namespace satellite {
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+/// Registers "satellite_output", the raw AV output backing the Program and Preview senders.
+/// Configured from the Satellite window rather than from a source.
+void register_satellite_output();
 
-extern const char *PLUGIN_NAME;
-extern const char *PLUGIN_VERSION;
+/// Applies the current Config to the two frontend senders, starting or stopping each as
+/// needed. Safe to call repeatedly; called on frontend events and after a settings change.
+void update_frontend_outputs();
 
-void obs_log(int log_level, const char *format, ...);
+/// Tears down both frontend senders. Called on module unload and on frontend exit.
+void shutdown_frontend_outputs();
 
-#ifdef __cplusplus
-}
-#endif
+} // namespace satellite

@@ -1,59 +1,119 @@
-# OBS Plugin Template
+# Satellite
 
-## Introduction
+An OBS Studio plugin that carries video, audio, metadata and tally between OBS and other
+machines on a local network, over **either NDI or OMT ([Open Media
+Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
+source/filter/output types and one management window.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+> **Status: feature complete, not yet battle-tested.** Both protocols work in both
+> directions — receive a feed into OBS, or publish your Program, Preview, or any single
+> source onto the network, with tally, over NDI or OMT.
+>
+> It has not yet been run inside a real OBS against real hardware. If you try it, please
+> report what breaks.
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+## Why
 
-## Supported Build Environments
+Running NDI and OMT today means running two plugins that each grab the same frames. Satellite
+puts both transports behind one abstraction so you can pick the protocol per feed — or switch
+an existing feed from one to the other — without rebuilding a scene or learning a second
+plugin.
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+## Features
 
-## Quick Start
+**Working today** — over NDI, and over OMT once its libraries are present
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+- **Satellite Source** — discovers feeds on the network and receives video and audio
+- **Satellite Sender** — a filter that publishes any source on the network. It renders the
+  source through a view of its own rather than intercepting async frames, so it works on
+  game capture, browser sources and scenes, not just cameras and media files
+- **Program and Preview outputs** — independently configurable from the Satellite window;
+  Preview runs only while Studio Mode is active
+- **Full bidirectional tally** — your sources tell remote senders when they are live here,
+  and your senders show whether someone downstream has you on air
+- **The Satellite window** — an OBS dock listing every active feed in either direction with
+  its state, format, bitrate, dropped frames and a rolling history sparkline
+- **Runtime status** — whether each protocol's library is present, with an install link for
+  NDI and a re-check button so installing it does not need an OBS restart
+- **DistroAV import** — converts an existing DistroAV setup, showing exactly what it will do
+  first and leaving your originals alone unless you ask otherwise
+- **Advanced settings** — NDI groups, and the OMT discovery server and port range, applied
+  without restarting OBS
+
+## Installing the runtimes
+
+Neither library is linked at build time. Satellite loads both at run time, and the Satellite
+window shows which of them it found.
+
+**NDI** cannot be shipped: the SDK is proprietary and not redistributable. Install the NDI 6
+runtime from [ndi.video/tools](https://ndi.video/tools/) — the Satellite window links to it
+when it is missing. This is the same approach DistroAV takes, for the same reason.
+
+**OMT** ships with Satellite. Upstream publishes no binaries, so Satellite builds `libomt`
+and `libvmx` from pinned sources and packages them beside the plugin — see
+[`lib/omt`](lib/omt/README.md).
+
+On **Linux**, OMT also needs the **Avahi daemon** running. libomt discovers sources through
+`avahi-client`, which aborts the process rather than returning an error if the daemon is
+missing, so Satellite declines to enable OMT without it instead of risking taking OBS down.
+Install and start `avahi-daemon`, or configure an OMT discovery server.
+
+## Building
+
+Satellite uses the standard [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate)
+build, with Qt and the frontend API enabled. Neither transport runtime is needed to build —
+both are resolved at run time.
+
+```sh
+build-aux/build-omt              # builds libomt + libvmx into deps/omt
+cmake --preset ubuntu-x86_64     # or windows-x64, macos
+cmake --build --preset ubuntu-x86_64
+```
+
+The first step needs the **.NET 8 SDK** and **clang** — `libomt` is C# compiled to a native
+library with NativeAOT. It is a build-time requirement only; nothing at run time needs .NET.
+Skip it and the plugin still builds, with OMT reporting itself unavailable. On Windows run
+`pwsh build-aux/Build-Omt.ps1` instead.
+
+Interface headers for both protocols are vendored: [`lib/ndi`](lib/ndi/README.md) (each file
+carries its own MIT licence, separate from the SDK) and [`lib/omt`](lib/omt/README.md) (MIT).
+Neither SDK needs installing to build.
+
+### Tests
+
+```sh
+cmake -S . -B build -DENABLE_TESTS=ON && cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Neither runtime can be installed in CI, so the test suite builds fakes for both against the
+same vendored headers and drives the real loaders against them — including a slow-sink mode
+that exercises what the send queue does under backpressure. See [`tests/`](tests/README.md).
+
+## Installing a release
+
+Releases are **unsigned** — there are no code signing certificates for this project — so the
+first launch needs a nudge:
+
+- **macOS**: Gatekeeper blocks the package. *System Settings → Privacy & Security → Open
+  Anyway*, or `xattr -dr com.apple.quarantine` on the download.
+- **Windows**: SmartScreen shows "Windows protected your PC". *More info → Run anyway*.
+- **Linux**: the `.deb` is unsigned, which is normal for packages outside a distro repo.
 
 ## Documentation
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the design specification: decisions taken
+  and why, how the two protocol APIs map onto one abstraction, the threading model, roadmap.
+- [`docs/RELEASING.md`](docs/RELEASING.md) — what CI produces, how to cut a release, and the
+  build-system traps that have already caught us once each.
 
-Suggested reading to get up and running:
+## Licence
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+GPL-2.0-or-later. See [LICENSE](LICENSE).
 
-## GitHub Actions & CI
-
-Default GitHub Actions workflows are available for the following repository actions:
-
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
-
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
-
-### Retrieving build artifacts
-
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
-
-### Building a Release
-
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
-
-## Signing and Notarizing on macOS
-
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed. Its header is vendored here and
+  the libraries are built from pinned sources and shipped with the plugin.
+- **NDI** is proprietary. Satellite links to it only at run time and ships none of it. NDI®
+  is a registered trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by
+  Vizrt.
+- **DistroAV** is GPL-2.0. Any code derived from it is marked as such in the file that does so.

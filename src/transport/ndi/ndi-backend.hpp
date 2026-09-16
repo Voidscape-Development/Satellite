@@ -18,20 +18,24 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "transport/transport.hpp"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+#include <memory>
+#include <string>
+#include <vector>
 
-extern const char *PLUGIN_NAME;
-extern const char *PLUGIN_VERSION;
+namespace satellite {
 
-void obs_log(int log_level, const char *format, ...);
+/// Where the NDI runtime is expected to live on this platform, in search order.
+///
+/// The NDI SDK is proprietary and cannot be redistributed, so Satellite never ships it and
+/// never links it at build time - it is located and dlopen'd at run time, and its absence
+/// is reported to the user with an install link.
+std::vector<std::string> ndi_runtime_candidates();
 
-#ifdef __cplusplus
-}
-#endif
+/// Where to send a user who does not have the runtime installed.
+const char *ndi_install_url();
+
+std::unique_ptr<IBackend> create_ndi_backend();
+
+} // namespace satellite

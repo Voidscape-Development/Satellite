@@ -18,20 +18,32 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <QVector>
+#include <QWidget>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+namespace satellite {
 
-extern const char *PLUGIN_NAME;
-extern const char *PLUGIN_VERSION;
+/// A small self-painted history plot, drawn from the widget palette so it follows whatever
+/// OBS theme is active.
+///
+/// Deliberately hand-rolled: one row-height plot per feed does not justify pulling a
+/// charting library into an OBS plugin.
+class Sparkline : public QWidget {
+	Q_OBJECT
 
-void obs_log(int log_level, const char *format, ...);
+public:
+	explicit Sparkline(QWidget *parent = nullptr);
 
-#ifdef __cplusplus
-}
-#endif
+	void setValues(const QVector<double> &values);
+
+	QSize sizeHint() const override;
+	QSize minimumSizeHint() const override;
+
+protected:
+	void paintEvent(QPaintEvent *event) override;
+
+private:
+	QVector<double> values_;
+};
+
+} // namespace satellite
