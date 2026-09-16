@@ -1,6 +1,6 @@
 /*
-Plugin Name
-Copyright (C) <Year> <Developer> <Email Address>
+Satellite - NDI and OMT transport for OBS Studio
+Copyright (C) 2026 Voidscape Development
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -16,19 +16,13 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <obs-module.h>
-#include <plugin-support.h>
+#pragma once
 
-OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
+namespace satellite {
 
-bool obs_module_load(void)
-{
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
-	return true;
-}
+/// Registers "satellite_filter": attach to any source to publish it on the network over the
+/// selected protocol. Carries the filtered source's audio as well as its video, behind a
+/// toggle that defaults on.
+void register_satellite_filter();
 
-void obs_module_unload(void)
-{
-	obs_log(LOG_INFO, "plugin unloaded");
-}
+} // namespace satellite

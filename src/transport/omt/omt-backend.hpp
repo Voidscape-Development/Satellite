@@ -16,24 +16,23 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <plugin-support.h>
+#pragma once
 
-const char *PLUGIN_NAME = "@CMAKE_PROJECT_NAME@";
-const char *PLUGIN_VERSION = "@CMAKE_PROJECT_VERSION@";
+#include "transport/transport.hpp"
 
-void obs_log(int log_level, const char *format, ...)
-{
-	size_t length = 4 + strlen(PLUGIN_NAME) + strlen(format);
+#include <memory>
+#include <string>
+#include <vector>
 
-	char *template = malloc(length + 1);
+namespace satellite {
 
-	snprintf(template, length, "[%s] %s", PLUGIN_NAME, format);
+/// Where libomt is expected to live, in search order.
+///
+/// Unlike NDI, OMT is MIT-licensed, so Satellite bundles libomt and libvmx alongside the
+/// plugin binary and looks there first. A system-wide install is still honoured as a
+/// fallback for users who build OMT themselves.
+std::vector<std::string> omt_runtime_candidates();
 
-	va_list(args);
+std::unique_ptr<IBackend> create_omt_backend();
 
-	va_start(args, format);
-	blogva(log_level, template, args);
-	va_end(args);
-
-	free(template);
-}
+} // namespace satellite

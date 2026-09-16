@@ -16,24 +16,34 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <plugin-support.h>
+#pragma once
 
-const char *PLUGIN_NAME = "@CMAKE_PROJECT_NAME@";
-const char *PLUGIN_VERSION = "@CMAKE_PROJECT_VERSION@";
+#include <QVector>
+#include <QWidget>
 
-void obs_log(int log_level, const char *format, ...)
-{
-	size_t length = 4 + strlen(PLUGIN_NAME) + strlen(format);
+namespace satellite {
 
-	char *template = malloc(length + 1);
+/// A small self-painted history plot, drawn from the widget palette so it follows whatever
+/// OBS theme is active.
+///
+/// Deliberately hand-rolled: one row-height plot per feed does not justify pulling a
+/// charting library into an OBS plugin.
+class Sparkline : public QWidget {
+	Q_OBJECT
 
-	snprintf(template, length, "[%s] %s", PLUGIN_NAME, format);
+public:
+	explicit Sparkline(QWidget *parent = nullptr);
 
-	va_list(args);
+	void setValues(const QVector<double> &values);
 
-	va_start(args, format);
-	blogva(log_level, template, args);
-	va_end(args);
+	QSize sizeHint() const override;
+	QSize minimumSizeHint() const override;
 
-	free(template);
-}
+protected:
+	void paintEvent(QPaintEvent *event) override;
+
+private:
+	QVector<double> values_;
+};
+
+} // namespace satellite

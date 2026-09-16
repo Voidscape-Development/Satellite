@@ -1,59 +1,68 @@
-# OBS Plugin Template
+# Satellite
 
-## Introduction
+An OBS Studio plugin that carries video, audio, metadata and tally between OBS and other
+machines on a local network, over **either NDI or OMT ([Open Media
+Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
+source/filter/output types and one management window.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+> **Status: early development.** The architecture, build and UI scaffolding are in place and
+> the plugin loads, but neither protocol backend is implemented yet — nothing sends or
+> receives video today. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+## Why
 
-## Supported Build Environments
+Running NDI and OMT today means running two plugins that each grab the same frames. Satellite
+puts both transports behind one abstraction so you can pick the protocol per feed — or switch
+an existing feed from one to the other — without rebuilding a scene or learning a second
+plugin.
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+## Planned features
 
-## Quick Start
+**Shared across both protocols**
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+- **Satellite Source** — receive a network feed into OBS, with a protocol dropdown
+- **Satellite Sender** — a filter that publishes any source on the network, video and audio
+- **Program and Preview outputs** — independently configurable, Preview follows Studio Mode
+- **Full bidirectional tally** — publish OBS's program/preview state upstream, and surface
+  the tally your sources report
+- **The Satellite window** — an OBS dock listing every active feed in either direction with
+  its state, format, bitrate, dropped frames and a rolling history sparkline
+- **Runtime status** — whether each protocol's library is present, with an install link for
+  NDI
+- **DistroAV import** — a one-time, non-destructive offer to convert an existing setup
+
+## Installing the runtimes
+
+**OMT** ships with Satellite. Nothing to install.
+
+**NDI** does not, and cannot: the NDI SDK is proprietary and not redistributable. Satellite
+loads it at run time and the Satellite window tells you if it is missing, with a link to
+[ndi.video/tools](https://ndi.video/tools/). This is the same approach DistroAV takes, for
+the same reason.
+
+## Building
+
+Satellite uses the standard [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate)
+build, with Qt and the frontend API enabled. Neither transport runtime is needed to build —
+both are resolved at run time.
+
+```sh
+cmake --preset ubuntu-x86_64     # or windows-x64, macos
+cmake --build --preset ubuntu-x86_64
+```
 
 ## Documentation
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the design specification: the decisions
+taken and why, how the two protocol APIs map onto one abstraction, the threading model, and
+the roadmap.
 
-Suggested reading to get up and running:
+## Licence
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+GPL-2.0-or-later. See [LICENSE](LICENSE).
 
-## GitHub Actions & CI
-
-Default GitHub Actions workflows are available for the following repository actions:
-
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
-
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
-
-### Retrieving build artifacts
-
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
-
-### Building a Release
-
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
-
-## Signing and Notarizing on macOS
-
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed and is bundled with Satellite.
+- **NDI** is proprietary. Satellite links to it only at run time and ships none of it. NDI®
+  is a registered trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by
+  Vizrt.
+- **DistroAV** is GPL-2.0. Any code derived from it is marked as such in the file that does so.

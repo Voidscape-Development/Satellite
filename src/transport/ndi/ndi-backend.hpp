@@ -16,24 +16,26 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
-#include <plugin-support.h>
+#pragma once
 
-const char *PLUGIN_NAME = "@CMAKE_PROJECT_NAME@";
-const char *PLUGIN_VERSION = "@CMAKE_PROJECT_VERSION@";
+#include "transport/transport.hpp"
 
-void obs_log(int log_level, const char *format, ...)
-{
-	size_t length = 4 + strlen(PLUGIN_NAME) + strlen(format);
+#include <memory>
+#include <string>
+#include <vector>
 
-	char *template = malloc(length + 1);
+namespace satellite {
 
-	snprintf(template, length, "[%s] %s", PLUGIN_NAME, format);
+/// Where the NDI runtime is expected to live on this platform, in search order.
+///
+/// The NDI SDK is proprietary and cannot be redistributed, so Satellite never ships it and
+/// never links it at build time - it is located and dlopen'd at run time, and its absence
+/// is reported to the user with an install link.
+std::vector<std::string> ndi_runtime_candidates();
 
-	va_list(args);
+/// Where to send a user who does not have the runtime installed.
+const char *ndi_install_url();
 
-	va_start(args, format);
-	blogva(log_level, template, args);
-	va_end(args);
+std::unique_ptr<IBackend> create_ndi_backend();
 
-	free(template);
-}
+} // namespace satellite
