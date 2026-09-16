@@ -8,21 +8,26 @@ ctest --test-dir build --output-on-failure
 
 Off by default, so the normal plugin build and the packaging CI are unaffected.
 
-## Why there is a fake NDI runtime
+## Why there are fake runtimes
 
-The NDI runtime is proprietary. It cannot be redistributed, cannot be installed in CI, and
-is not present on most development machines — so without something standing in for it,
-nothing about Satellite's NDI path could be verified anywhere.
+Neither transport library can be installed in CI. The NDI runtime is proprietary and not
+redistributable; the OMT libraries are published only as source and need a .NET 8 NativeAOT
+build. Without something standing in for them, nothing about either protocol path could be
+verified anywhere.
 
-`fake-ndi.cpp` is a small shared library that exports `NDIlib_v6_load()` and implements the
-handful of entry points Satellite actually calls. Crucially it is **compiled against the same
-vendored SDK header** (`lib/ndi/Processing.NDI.DynamicLoad.h`) that the backend compiles
-against, so if Satellite's use of the ABI is wrong — a misnamed field, a bad struct
-assumption — it fails here rather than on a user's machine.
+`fake-ndi.cpp` and `fake-omt.cpp` are small shared libraries that export the same symbols the
+backends bind, implementing the entry points Satellite actually calls. Crucially each is
+**compiled against the same vendored header the backend compiles against** — so if
+Satellite's use of an ABI is wrong (a misnamed field, a bad struct assumption) it fails here
+rather than on a user's machine.
 
-The test builds it under the name the loader searches for (`libndi.so.6`, or `libndi.dylib`
-on macOS), points `NDI_RUNTIME_DIR_V6` at its directory, and then exercises the **real**
-loader. Nothing about the load path is mocked.
+Each is built under the name its loader searches for, and the **real** loader is what finds
+it. Nothing about either load path is mocked:
+
+- the NDI fake is built as `libndi.so.6` (`libndi.dylib` on macOS) with
+  `NDI_RUNTIME_DIR_V6` pointed at its directory
+- the OMT fake is built as `libomt.so` next to the test binaries, which exercises the
+  backend's real "bundled beside the plugin" search path, with no environment variable at all
 
 ## What the tests cover
 
@@ -56,8 +61,25 @@ loader. Nothing about the load path is mocked.
   depend on memory the pusher has since reused
 - The feed appears in the registry as a sender while running and is gone after stop
 
+### `omt-test` — both directions over OMT
+
+- The library is found through the bundled-beside-the-plugin path, every flat C symbol binds,
+  and the configured discovery server and port range are pushed into libomt at load
+- Discovery returns sources, and the strings are copied out — verified by calling discovery
+  again, since libomt's array is only valid until its next call
+- A receiver is created with the right frame types, preferred format and suggested quality
+- UYVY, BGRA and BGRX are all decoded, including the detail that **OMT signals BGRA vs BGRX
+  through an alpha flag rather than a different codec**
+- Audio arrives as planar float with the planes packed back to back
+- Tally is sent upstream, and statistics come back with `bitrate_estimated` **false** — OMT
+  reports real byte counters, so unlike NDI the figure is exact
+- A sender maps formats and timestamps correctly, leaves the alpha flag clear for opaque
+  frames (so OMT keeps BGRX semantics), and reports tally and connections
+- `omt_shutdown` runs before the library handle is released, so libomt's own background
+  threads do not outlive the code they are in
+
 ## What it does not cover
 
-It is a fake, so it proves Satellite drives the ABI correctly — not that the real runtime
-behaves the way the fake does. Timing, reconnection, genuine network behaviour and real
-sender interop still need a machine with NDI installed.
+These are fakes, so they prove Satellite drives each ABI correctly — not that the real
+libraries behave the way the fakes do. Timing, reconnection, genuine network behaviour and
+interop with real senders still need machines with the actual runtimes installed.

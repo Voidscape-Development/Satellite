@@ -1,7 +1,8 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.3** — design agreed, scaffolding landed, NDI receive and send
-> implemented (M1, M2). OMT is not yet implemented. This document is the contract the
+> Status: **draft v0.4** — design agreed, scaffolding landed, NDI and OMT both implemented
+> in both directions (M1–M3). How the OMT libraries are built and packaged is **unsettled**
+> — see §11.1. This document is the contract the
 > implementation is built against; change it in the same PR that changes the behaviour it
 > describes.
 
@@ -43,7 +44,7 @@ have to be rediscovered.
 |---|---|---|---|
 | 1 | First deliverable | Spec doc + compiling scaffolding | Reviewable shape before protocol code exists |
 | 2 | OBS UI shape | Unified types with a protocol dropdown | The point of the plugin is switching transport without rebuilding scenes |
-| 3 | OMT native libraries | Bundle upstream prebuilt binaries | MIT-licensed and redistributable; avoids .NET 8 in CI |
+| 3 | OMT native libraries | ~~Bundle upstream prebuilt binaries~~ — **premise was wrong, see §11.1** | Upstream publishes no binaries at all, so there is nothing to bundle |
 | 4 | Platforms | Windows, Linux, macOS | All three, Windows/Linux first through CI |
 | 5 | Metrics | Network + health with sparklines | Exact values both SDKs already expose; no charting dependency |
 | 6 | Tally | Full bidirectional | The main reason NDI gets used in multi-machine production |
@@ -87,7 +88,8 @@ Upstream (github.com/openmediatransport) ships:
 
 `libomtnet` is statically linked into `libomt` by the NativeAOT build, so at run time
 Satellite needs only **`libomt` + `libvmx`**. The .NET 8 SDK is a *build-time* requirement
-only, which is why decision #3 (bundle upstream prebuilt binaries) avoids it entirely.
+only — nothing at run time needs .NET installed. See §11.1 for why this matters more than it
+first appeared to.
 
 Discovery is DNS-SD/mDNS or multicast UDP, with an optional TCP discovery server for
 networks where multicast is blocked (`omt_settings_set_string("DiscoveryServer", "omt://host:port")`).
@@ -125,7 +127,7 @@ compromise.
 |---|---|
 | NDI discovery blocks; OMT discovery polls | `IBackend::wait_for_sources(timeout_ms)` — NDI blocks in the SDK, OMT sleeps. One thread, one cadence (§6). |
 | `omt_discovery_getaddresses` returns an array valid only until the next call | Exactly one thread may call it, and it copies under lock before returning. This is the single-discovery-thread design, enforced by the API. |
-| NDI exposes no byte counters | `FeedStats::bitrate_mbps` is measured by Satellite from frame sizes for NDI, and read from `OMTStatistics::BytesSentSinceLast` for OMT. The dock marks estimated values. |
+| NDI exposes no byte counters | `FeedStats::bitrate_mbps` is measured by Satellite from frame sizes for NDI (and flagged `bitrate_estimated`), and read exactly from `OMTStatistics` for OMT. The dock marks the estimated ones with a `~`. |
 | Quality knobs are shaped differently — OMT has `OMTQuality` Default/Low/Medium/High; NDI has bandwidth modes highest/lowest/audio-only | A common `Quality` enum maps onto each. `OMTReceiveFlags_Preview` (1/8 preview) and `NDIlib_recv_bandwidth_lowest` both back the shared "low bandwidth preview" mode. |
 | Discovery server configuration | Common Advanced setting, written through `omt_settings_set_string` / the NDI equivalent. |
 | HDR / high bit depth | OMT `P216`/`PA16`, NDI `P216`. Common `HighBitDepth` flag; deferred past v1 but the frame struct carries it. |
@@ -330,9 +332,35 @@ unavailable" in the dock instead of a module that refuses to load.
 | macOS | `dlopen` the installed NDI framework | `.dylib`s bundled in the plugin bundle, universal arm64+x86_64, codesigned and notarized |
 | Linux | `dlopen` `libndi.so.*` from the installed runtime | `.so`s bundled in the plugin data dir, loaded by absolute path |
 
-Vendored OMT binaries live under `deps/omt/<platform>/` with their upstream version and
-SHA-256 recorded in `buildspec.json`, so an update is a reviewable diff rather than a
-silent drop-in.
+### 11.1 The OMT libraries are not actually distributed
+
+Decision #3 was "bundle upstream prebuilt binaries". That rested on a premise that turned out
+to be false, and the correction is recorded here because it changes what is possible.
+
+**Upstream publishes no binaries.** Neither `libomt` nor `libvmx` has a single GitHub
+release, and neither commits build output. Both are source-only:
+
+| Repository | Language | Build requirement |
+|---|---|---|
+| `libomt` | C# | **.NET 8 SDK**, NativeAOT, per-platform scripts in `build/` |
+| `libvmx` | C / C++ | A C++ compiler, per-platform scripts in `build/` |
+
+Prebuilt copies do exist inside the release packages of `omtplugin`, the reference OBS
+plugin — which is where the impression that upstream ships libraries comes from. Those are
+that project's packaging, not a library distribution.
+
+So there are three real options, none of which is the one that was chosen:
+
+| Option | Cost |
+|---|---|
+| **Build both from source in CI** | `libvmx` is straightforward C++. `libomt` needs the .NET 8 SDK and a NativeAOT build on all three runners, plus a universal build on macOS. This is the only route that ships working OMT out of the box — and it is exactly the CI complexity decision #3 was chosen to avoid. |
+| **Take the binaries from `omtplugin` releases** | No build work, but it pins Satellite to another project's packaging cadence and ships artifacts nobody here produced or verified. |
+| **Ship nothing and load what is there** | No build or CI work, and what the code does today. OMT simply reports itself unavailable unless the user supplies `libomt`, exactly as NDI does when its runtime is missing. |
+
+Until this is settled the backend degrades cleanly: the Satellite window shows OMT as
+unavailable with the reason, and NDI and the rest of the plugin are unaffected. Nothing in
+`src/transport/omt/` changes depending on which option is taken — it is purely a build and
+packaging question.
 
 ## 12. Licensing
 
@@ -359,7 +387,7 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 | **M0 — scaffolding** *(landed)* | Spec, renamed template, Qt + frontend API enabled, transport abstraction, stub backends, discovery service, feed registry, dock skeleton, source/filter/output registered. Compiles and loads; no protocol traffic. |
 | **M1 — NDI receive** *(landed)* | Vendored NDI 6 headers, runtime loader, real discovery, receiver with full frame conversion, Satellite Source pushing video and audio into OBS, dock showing live receive feeds, fake-runtime test harness |
 | **M2 — NDI send** *(landed)* | NDI sender, bounded send queue with a drop policy, Program and Preview outputs, Sender filter over a dedicated view, bidirectional tally, output controls in the dock |
-| **M3 — OMT parity** | `libomt` loader, vendored binaries, OMT source/filter/output, unified discovery |
+| **M3 — OMT parity** *(code landed; packaging open)* | Vendored `libomt.h`, runtime loader binding the flat C exports, OMT receiver and sender with full frame conversion, discovery, tally and exact statistics, fake-libomt test harness. The OMT libraries themselves are not yet built or shipped — §11.1. |
 | **M4 — polish** | DistroAV import, sparklines and full metrics, advanced per-protocol settings, install-helper flows |
 | **M5 — release** | Three-platform CI packaging, codesigning/notarization, docs |
 

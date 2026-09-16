@@ -46,11 +46,11 @@ endif()
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
 
-# lib/ndi holds the vendored NDI SDK interface headers. They describe the runtime's ABI but
-# nothing is linked against them - see lib/ndi/README.md.
+# lib/ndi and lib/omt hold vendored interface headers for the two runtimes. They describe each
+# ABI, but nothing is linked against them - both libraries are loaded at run time.
 target_include_directories(
   ${CMAKE_PROJECT_NAME}
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/lib/ndi"
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/lib/ndi" "${CMAKE_CURRENT_SOURCE_DIR}/lib/omt"
 )
 
 target_sources(
@@ -75,6 +75,8 @@ target_sources(
     src/transport/library-loader.hpp
     src/transport/ndi/ndi-backend.cpp
     src/transport/ndi/ndi-backend.hpp
+    src/transport/omt/omt-api.cpp
+    src/transport/omt/omt-api.hpp
     src/transport/omt/omt-backend.cpp
     src/transport/omt/omt-backend.hpp
     src/transport/rate-meter.hpp

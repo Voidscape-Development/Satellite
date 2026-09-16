@@ -5,9 +5,13 @@ machines on a local network, over **either NDI or OMT ([Open Media
 Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
 source/filter/output types and one management window.
 
-> **Status: early development.** **NDI works in both directions** — receive a feed into OBS,
-> or publish your Program, Preview, or any single source onto the network, with tally.
-> OMT is not implemented yet. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
+> **Status: early development.** **Both protocols now work in both directions** — receive a
+> feed into OBS, or publish your Program, Preview, or any single source onto the network,
+> with tally, over NDI or OMT.
+>
+> One caveat for OMT: upstream publishes no prebuilt libraries and Satellite does not yet
+> build them, so OMT shows as unavailable until you supply `libomt` yourself. See
+> [`lib/omt`](lib/omt/README.md) and [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
 
 ## Why
 
@@ -18,7 +22,7 @@ plugin.
 
 ## Features
 
-**Working today, over NDI**
+**Working today** — over NDI, and over OMT once its libraries are present
 
 - **Satellite Source** — discovers feeds on the network and receives video and audio
 - **Satellite Sender** — a filter that publishes any source on the network. It renders the
@@ -35,17 +39,24 @@ plugin.
 
 **Planned**
 
-- **All of the above over OMT** — the same types, with the protocol dropdown switched
+- **Shipping the OMT libraries** — see [`lib/omt`](lib/omt/README.md)
 - **DistroAV import** — a one-time, non-destructive offer to convert an existing setup
 
 ## Installing the runtimes
 
-**OMT** ships with Satellite. Nothing to install.
+Neither library is linked at build time. Satellite loads both at run time, and the Satellite
+window shows which of them it found.
 
-**NDI** does not, and cannot: the NDI SDK is proprietary and not redistributable. Satellite
-loads it at run time and the Satellite window tells you if it is missing, with a link to
-[ndi.video/tools](https://ndi.video/tools/). This is the same approach DistroAV takes, for
-the same reason.
+**NDI** cannot be shipped: the SDK is proprietary and not redistributable. Install the NDI 6
+runtime from [ndi.video/tools](https://ndi.video/tools/) — the Satellite window links to it
+when it is missing. This is the same approach DistroAV takes, for the same reason.
+
+**OMT** is MIT-licensed and could be shipped, but upstream publishes no binaries for it and
+Satellite does not build them yet, so for now you need to supply `libomt` (and `libvmx`)
+yourself — built from source, or taken from an
+[`omtplugin`](https://github.com/openmediatransport/omtplugin) install. Satellite looks
+beside its own binary first, then on the system library path. See
+[`lib/omt`](lib/omt/README.md).
 
 ## Building
 
@@ -58,8 +69,9 @@ cmake --preset ubuntu-x86_64     # or windows-x64, macos
 cmake --build --preset ubuntu-x86_64
 ```
 
-The NDI SDK interface headers are vendored in [`lib/ndi`](lib/ndi/README.md) — each carries
-its own MIT licence, so no SDK install is needed to build.
+Interface headers for both protocols are vendored: [`lib/ndi`](lib/ndi/README.md) (each file
+carries its own MIT licence, separate from the SDK) and [`lib/omt`](lib/omt/README.md) (MIT).
+Neither SDK needs installing to build.
 
 ### Tests
 
@@ -68,8 +80,8 @@ cmake -S . -B build -DENABLE_TESTS=ON && cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The NDI runtime can't be installed in CI, so the test suite builds a fake one against the
-same vendored headers and drives the real loader against it — including a slow-sink mode
+Neither runtime can be installed in CI, so the test suite builds fakes for both against the
+same vendored headers and drives the real loaders against them — including a slow-sink mode
 that exercises what the send queue does under backpressure. See [`tests/`](tests/README.md).
 
 ## Documentation
@@ -82,7 +94,8 @@ the roadmap.
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).
 
-- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed and is bundled with Satellite.
+- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed. Its header is vendored here;
+  the libraries are not yet shipped.
 - **NDI** is proprietary. Satellite links to it only at run time and ships none of it. NDI®
   is a registered trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by
   Vizrt.
