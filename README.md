@@ -5,9 +5,9 @@ machines on a local network, over **either NDI or OMT ([Open Media
 Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
 source/filter/output types and one management window.
 
-> **Status: early development.** The architecture, build and UI scaffolding are in place and
-> the plugin loads, but neither protocol backend is implemented yet — nothing sends or
-> receives video today. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
+> **Status: early development.** **NDI receiving works** — add a Satellite Source, pick an
+> NDI feed, and it plays in OBS with audio. Sending and all OMT support are not implemented
+> yet. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
 
 ## Why
 
@@ -16,11 +16,16 @@ puts both transports behind one abstraction so you can pick the protocol per fee
 an existing feed from one to the other — without rebuilding a scene or learning a second
 plugin.
 
-## Planned features
+## Features
 
-**Shared across both protocols**
+**Working today**
 
-- **Satellite Source** — receive a network feed into OBS, with a protocol dropdown
+- **Satellite Source over NDI** — discovers feeds on the network, receives video and audio,
+  and shows them live in the Satellite window with bitrate, dropped frames and format
+
+**Planned, shared across both protocols**
+
+- **Satellite Source over OMT** — the same source type, with the protocol dropdown switched
 - **Satellite Sender** — a filter that publishes any source on the network, video and audio
 - **Program and Preview outputs** — independently configurable, Preview follows Studio Mode
 - **Full bidirectional tally** — publish OBS's program/preview state upstream, and surface
@@ -50,6 +55,19 @@ both are resolved at run time.
 cmake --preset ubuntu-x86_64     # or windows-x64, macos
 cmake --build --preset ubuntu-x86_64
 ```
+
+The NDI SDK interface headers are vendored in [`lib/ndi`](lib/ndi/README.md) — each carries
+its own MIT licence, so no SDK install is needed to build.
+
+### Tests
+
+```sh
+cmake -S . -B build -DENABLE_TESTS=ON && cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The NDI runtime can't be installed in CI, so the test suite builds a fake one against the
+same vendored headers and drives the real loader against it. See [`tests/`](tests/README.md).
 
 ## Documentation
 

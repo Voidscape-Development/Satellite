@@ -23,12 +23,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "transport/transport.hpp"
 
 #include <atomic>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <thread>
 
 #include <obs-module.h>
 #include <plugin-support.h>
+#include <util/platform.h>
 
 namespace satellite {
 
@@ -69,24 +71,177 @@ void stop_receiving(SourceContext *context)
 	}
 }
 
+/// How long a single capture may block. Short enough that stopping the source is responsive,
+/// long enough that an idle feed is not a busy loop.
+constexpr int kCaptureTimeoutMs = 100;
+
+/// OBS's speaker_layout values are defined so that each one equals its channel count, which
+/// is why the usual idiom is a straight cast. Seven channels is the gap in that scheme and
+/// has no layout, so it is reported as unknown and the caller drops the frame rather than
+/// handing OBS a layout that would make it read a plane that is not there.
+speaker_layout speakers_for(uint32_t channels)
+{
+	switch (channels) {
+	case 1:
+		return SPEAKERS_MONO;
+	case 2:
+		return SPEAKERS_STEREO;
+	case 3:
+		return SPEAKERS_2POINT1;
+	case 4:
+		return SPEAKERS_4POINT0;
+	case 5:
+		return SPEAKERS_4POINT1;
+	case 6:
+		return SPEAKERS_5POINT1;
+	case 8:
+		return SPEAKERS_7POINT1;
+	default:
+		return SPEAKERS_UNKNOWN;
+	}
+}
+
+std::string describe_video(const VideoFrame &frame)
+{
+	const char *format = get_video_format_name(frame.format);
+
+	char buffer[128];
+	if (frame.framerate_den > 0) {
+		const double fps = static_cast<double>(frame.framerate_num) / static_cast<double>(frame.framerate_den);
+		snprintf(buffer, sizeof(buffer), "%ux%u%s%.2f %s", frame.width, frame.height,
+			 frame.interlaced ? "i" : "p", fps, format);
+	} else {
+		snprintf(buffer, sizeof(buffer), "%ux%u %s", frame.width, frame.height, format);
+	}
+
+	return buffer;
+}
+
+std::string describe_audio(const AudioFrame &frame)
+{
+	char buffer[64];
+	snprintf(buffer, sizeof(buffer), "%.4g kHz %uch", static_cast<double>(frame.sample_rate) / 1000.0,
+		 frame.channels);
+	return buffer;
+}
+
+void publish_video(SourceContext *context, const VideoFrame &frame)
+{
+	obs_source_frame obs_frame = {};
+
+	obs_frame.width = frame.width;
+	obs_frame.height = frame.height;
+	obs_frame.format = frame.format;
+	obs_frame.timestamp = frame.timestamp_ns;
+	obs_frame.flip = false;
+
+	for (size_t plane = 0; plane < MAX_AV_PLANES; ++plane) {
+		obs_frame.data[plane] = frame.data[plane];
+		obs_frame.linesize[plane] = frame.linesize[plane];
+	}
+
+	// Fills in the YUV->RGB matrix and the colour range for the format. Skipped for RGB
+	// formats, where OBS does not use a conversion matrix.
+	if (frame.colorspace != VIDEO_CS_DEFAULT)
+		video_format_get_parameters_for_format(frame.colorspace, frame.range, frame.format,
+						       obs_frame.color_matrix, obs_frame.color_range_min,
+						       obs_frame.color_range_max);
+
+	obs_frame.full_range = frame.range == VIDEO_RANGE_FULL;
+
+	obs_source_output_video(context->source, &obs_frame);
+}
+
+void publish_audio(SourceContext *context, const AudioFrame &frame)
+{
+	if (frame.channels == 0 || frame.frames == 0)
+		return;
+
+	const speaker_layout speakers = speakers_for(frame.channels);
+	if (speakers == SPEAKERS_UNKNOWN)
+		return;
+
+	obs_source_audio obs_audio = {};
+
+	obs_audio.frames = frame.frames;
+	obs_audio.samples_per_sec = frame.sample_rate;
+	obs_audio.timestamp = frame.timestamp_ns;
+
+	// Both protocols carry 32-bit planar float, which is what OBS uses internally, so the
+	// samples are handed over as-is.
+	obs_audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
+	obs_audio.speakers = speakers;
+
+	for (size_t channel = 0; channel < MAX_AUDIO_CHANNELS; ++channel)
+		obs_audio.data[channel] = frame.data[channel];
+
+	obs_source_output_audio(context->source, &obs_audio);
+}
+
+/// Keeps the Satellite window's row for this feed current.
+void publish_stats(SourceContext *context, const FeedStats &stats, bool connected)
+{
+	FeedRegistry &registry = FeedRegistry::instance();
+
+	registry.update_stats(context->feed_id, stats);
+	registry.set_state(context->feed_id, connected ? FeedState::Connected : FeedState::Connecting);
+}
+
 void receive_loop(SourceContext *context)
 {
-	// M1/M3: pull frames from context->receiver and push them into OBS.
-	//
 	// A CapturedFrame is borrowed, not owned: OMT keeps frame data valid only until the
 	// next omt_receive() on the same instance and frame type, and NDI needs an explicit
 	// free. obs_source_output_video/_audio both copy, so the frame must be released before
 	// the next capture - which is what letting it leave scope each iteration does.
+	uint64_t last_stats_ns = 0;
+	std::string last_video_format;
+	std::string last_audio_format;
+
 	while (context->running.load(std::memory_order_acquire)) {
-		CapturedFrame frame = context->receiver->capture(100);
+		CapturedFrame frame = context->receiver->capture(kCaptureTimeoutMs);
+
 		switch (frame.type()) {
-		case FrameType::Video:
+		case FrameType::Video: {
+			// An unsupported pixel format yields a typed frame with no planes, so that
+			// its destructor still frees the allocation. Skip it rather than publishing.
+			if (!frame.video.data[0])
+				break;
+
+			publish_video(context, frame.video);
+
+			std::string format = describe_video(frame.video);
+			if (format != last_video_format) {
+				FeedRegistry::instance().set_video_format(context->feed_id, format);
+				last_video_format = std::move(format);
+			}
 			break;
-		case FrameType::Audio:
+		}
+
+		case FrameType::Audio: {
+			if (!context->want_audio)
+				break;
+
+			publish_audio(context, frame.audio);
+
+			std::string format = describe_audio(frame.audio);
+			if (format != last_audio_format) {
+				FeedRegistry::instance().set_audio_format(context->feed_id, format);
+				last_audio_format = std::move(format);
+			}
 			break;
+		}
+
 		case FrameType::Metadata:
 		case FrameType::None:
 			break;
+		}
+
+		// Polling the counters costs a lock and, on NDI, a call into the runtime, so it is
+		// throttled to roughly the dock's own refresh rate rather than run per frame.
+		const uint64_t now = os_gettime_ns();
+		if (now - last_stats_ns >= 500000000ULL) {
+			publish_stats(context, context->receiver->stats(), context->receiver->connected());
+			last_stats_ns = now;
 		}
 	}
 }
@@ -190,26 +345,52 @@ void source_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, kSettingAlpha, false);
 }
 
-/// Repopulates the source list whenever the protocol changes, so the combo only ever offers
-/// sources that the selected protocol can actually connect to.
+/// Fills the source combo from the discovery registry, keeping whatever is currently
+/// selected in the list even if discovery has not seen it (yet, or at all) - otherwise
+/// opening properties on a source whose sender is briefly offline would silently clear it.
+void populate_sources(obs_properties_t *properties, Protocol protocol, const char *selected)
+{
+	obs_property_t *list = obs_properties_get(properties, kSettingSource);
+	if (!list)
+		return;
+
+	obs_property_list_clear(list);
+
+	bool selected_listed = !selected || !*selected;
+	for (const SourceRef &source : DiscoveryService::instance().sources_for(protocol)) {
+		obs_property_list_add_string(list, source.name.c_str(), source.address.c_str());
+		if (!selected_listed && source.address == selected)
+			selected_listed = true;
+	}
+
+	if (!selected_listed)
+		obs_property_list_add_string(list, selected, selected);
+}
+
+/// Repopulates the list whenever the protocol changes, so the combo only ever offers sources
+/// the selected protocol can actually connect to.
 bool on_protocol_modified(obs_properties_t *properties, obs_property_t *, obs_data_t *settings)
 {
 	Protocol protocol = Protocol::NDI;
 	protocol_from_id(obs_data_get_string(settings, kSettingProtocol), protocol);
 
-	obs_property_t *list = obs_properties_get(properties, kSettingSource);
-	if (!list)
-		return false;
-
-	obs_property_list_clear(list);
-	for (const SourceRef &source : DiscoveryService::instance().sources_for(protocol))
-		obs_property_list_add_string(list, source.name.c_str(), source.address.c_str());
-
+	populate_sources(properties, protocol, obs_data_get_string(settings, kSettingSource));
 	return true;
 }
 
-obs_properties_t *source_properties(void *)
+/// Rescans on demand. Discovery itself runs continuously in the background, so this only
+/// re-reads the registry - it does not kick off a scan.
+bool on_refresh_clicked(obs_properties_t *properties, obs_property_t *, void *data)
 {
+	auto *context = static_cast<SourceContext *>(data);
+	populate_sources(properties, context ? context->protocol : Protocol::NDI,
+			 context ? context->address.c_str() : nullptr);
+	return true;
+}
+
+obs_properties_t *source_properties(void *data)
+{
+	auto *context = static_cast<SourceContext *>(data);
 	obs_properties_t *properties = obs_properties_create();
 
 	obs_property_t *protocol = obs_properties_add_list(properties, kSettingProtocol,
@@ -223,6 +404,11 @@ obs_properties_t *source_properties(void *)
 	// for OMT, or a machine name for NDI.
 	obs_properties_add_list(properties, kSettingSource, obs_module_text("Satellite.Source.Name"),
 				OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+	populate_sources(properties, context ? context->protocol : Protocol::NDI,
+			 context ? context->address.c_str() : nullptr);
+
+	obs_properties_add_button2(properties, "refresh", obs_module_text("Satellite.Source.Refresh"),
+				   on_refresh_clicked, context);
 
 	obs_property_t *quality = obs_properties_add_list(properties, kSettingQuality,
 							  obs_module_text("Satellite.Quality"), OBS_COMBO_TYPE_LIST,

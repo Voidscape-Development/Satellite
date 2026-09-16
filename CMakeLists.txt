@@ -46,7 +46,12 @@ endif()
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
 
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# lib/ndi holds the vendored NDI SDK interface headers. They describe the runtime's ABI but
+# nothing is linked against them - see lib/ndi/README.md.
+target_include_directories(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/lib/ndi"
+)
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
@@ -70,6 +75,7 @@ target_sources(
     src/transport/ndi/ndi-backend.hpp
     src/transport/omt/omt-backend.cpp
     src/transport/omt/omt-backend.hpp
+    src/transport/rate-meter.hpp
     src/transport/transport.cpp
     src/transport/transport.hpp
     src/ui/satellite-dock.cpp
@@ -79,3 +85,10 @@ target_sources(
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+option(ENABLE_TESTS "Build Satellite's test harnesses" OFF)
+
+if(ENABLE_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

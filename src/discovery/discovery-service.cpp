@@ -74,27 +74,36 @@ void DiscoveryService::stop()
 void DiscoveryService::run()
 {
 	while (running_.load(std::memory_order_acquire)) {
-		std::vector<SourceRef> found;
-
+		std::vector<IBackend *> ready;
 		for (IBackend *backend : all_backends()) {
+			if (backend->available())
+				ready.push_back(backend);
+		}
+
+		if (ready.empty()) {
+			// No runtime has loaded. Sleep the same cadence rather than spinning, and
+			// publish nothing so a previously-seen list is cleared.
+			std::unique_lock<std::mutex> lock(wake_mutex_);
+			wake_.wait_for(lock, std::chrono::milliseconds(kWaitTimeoutMs),
+				       [this] { return !running_.load(std::memory_order_acquire); });
+			publish({});
+			continue;
+		}
+
+		// Each backend waits for a share of the cycle, so adding a second protocol keeps
+		// the round-trip at roughly kWaitTimeoutMs instead of doubling it.
+		const int per_backend_ms = kWaitTimeoutMs / static_cast<int>(ready.size());
+
+		std::vector<SourceRef> found;
+		for (IBackend *backend : ready) {
 			if (!running_.load(std::memory_order_acquire))
 				break;
-			if (!backend->available())
-				continue;
 
-			backend->wait_for_sources(kWaitTimeoutMs);
+			backend->wait_for_sources(per_backend_ms);
 
 			std::vector<SourceRef> from_backend = backend->poll_sources();
 			found.insert(found.end(), std::make_move_iterator(from_backend.begin()),
 				     std::make_move_iterator(from_backend.end()));
-		}
-
-		if (found.empty()) {
-			// Nothing to wait on yet - either no backend has loaded, or none found
-			// anything. Sleep the same cadence so an unavailable runtime does not spin.
-			std::unique_lock<std::mutex> lock(wake_mutex_);
-			wake_.wait_for(lock, std::chrono::milliseconds(kWaitTimeoutMs),
-				       [this] { return !running_.load(std::memory_order_acquire); });
 		}
 
 		publish(std::move(found));

@@ -1,8 +1,9 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.1** — design agreed, scaffolding landed, protocol backends not yet
-> implemented. This document is the contract the implementation is built against; change
-> it in the same PR that changes the behaviour it describes.
+> Status: **draft v0.2** — design agreed, scaffolding landed, NDI receive implemented (M1).
+> OMT and the send paths are not yet implemented. This document is the contract the
+> implementation is built against; change it in the same PR that changes the behaviour it
+> describes.
 
 ## 1. What Satellite is
 
@@ -336,16 +337,21 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 - **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT — compatible, redistributable, and
   bundled. Upstream copyright and the MIT text ship in the package.
 - **NDI** is proprietary. Satellite links to it only at run time through `dlopen`, ships
-  none of it, and requires the user to install the NDI runtime themselves. NDI® is a
-  registered trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by
-  Vizrt.
+  none of the runtime, and requires the user to install it themselves. NDI® is a registered
+  trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by Vizrt.
+
+  The SDK's *interface headers* are a separate matter and are vendored in `lib/ndi`: each
+  one carries its own MIT licence notice ("the following MIT license applies to this file
+  ONLY and not to the SDK as a whole"), so redistributing the headers is explicitly
+  permitted. That is what makes building without an installed SDK possible, and it is why
+  this is not the licence compromise it first appears to be. See `lib/ndi/README.md`.
 
 ## 13. Roadmap
 
 | Milestone | Contents |
 |---|---|
 | **M0 — scaffolding** *(landed)* | Spec, renamed template, Qt + frontend API enabled, transport abstraction, stub backends, discovery service, feed registry, dock skeleton, source/filter/output registered. Compiles and loads; no protocol traffic. |
-| **M1 — NDI receive** | NDI runtime loader, real discovery, Satellite Source end to end, dock showing live receive feeds |
+| **M1 — NDI receive** *(landed)* | Vendored NDI 6 headers, runtime loader, real discovery, receiver with full frame conversion, Satellite Source pushing video and audio into OBS, dock showing live receive feeds, fake-runtime test harness |
 | **M2 — NDI send** | Sender filter, Program/Preview outputs, bidirectional tally |
 | **M3 — OMT parity** | `libomt` loader, vendored binaries, OMT source/filter/output, unified discovery |
 | **M4 — polish** | DistroAV import, sparklines and full metrics, advanced per-protocol settings, install-helper flows |
@@ -355,8 +361,10 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 
 Not blocking M0/M1; worth settling before the milestone that needs them.
 
-1. **NDI SDK version floor** — v5 or v6? v6 widens the runtime search but narrows who can
-   run it. (M1)
+1. ~~**NDI SDK version floor**~~ — settled: **v6 only**. `NDIlib_v6_load` is the single
+   entry point bound, and the runtime search uses `NDILIB_REDIST_FOLDER` /
+   `NDILIB_LIBRARY_NAME` from the vendored headers so it tracks the SDK version rather than
+   hard-coding paths.
 2. **Sender naming** — DistroAV uses `MACHINE (source name)`. Keep that convention for
    familiarity, or make it a template string? (M2)
 3. **Per-feed CPU** — deliberately excluded from decision #5. OMT hands us `CodecTime` for
