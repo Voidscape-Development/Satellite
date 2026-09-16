@@ -31,6 +31,13 @@
             }
         }
     },
+    "omt": {
+        "label": "Open Media Transport libraries",
+        "comment": "Built from source by build-aux/build-omt because upstream publishes no binaries",
+        "libomtnetCommit": "029ef4e925c68973f3289eb0c7ecfd40a161166f",
+        "libomtCommit": "bb4b67be8e5964f1017592b9fc5406495e704e5d",
+        "libvmxCommit": "544bcfb36678b8e1d55edf5603a3ced05c1aec7f"
+    },
     "platformConfig": {
         "macos": {
             "bundleId": "com.voidscape.satellite"

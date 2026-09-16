@@ -9,9 +9,7 @@ source/filter/output types and one management window.
 > feed into OBS, or publish your Program, Preview, or any single source onto the network,
 > with tally, over NDI or OMT.
 >
-> One caveat for OMT: upstream publishes no prebuilt libraries and Satellite does not yet
-> build them, so OMT shows as unavailable until you supply `libomt` yourself. See
-> [`lib/omt`](lib/omt/README.md) and [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
+> See [the roadmap](docs/ARCHITECTURE.md#13-roadmap) for what is still to come.
 
 ## Why
 
@@ -39,7 +37,6 @@ plugin.
 
 **Planned**
 
-- **Shipping the OMT libraries** — see [`lib/omt`](lib/omt/README.md)
 - **DistroAV import** — a one-time, non-destructive offer to convert an existing setup
 
 ## Installing the runtimes
@@ -51,12 +48,14 @@ window shows which of them it found.
 runtime from [ndi.video/tools](https://ndi.video/tools/) — the Satellite window links to it
 when it is missing. This is the same approach DistroAV takes, for the same reason.
 
-**OMT** is MIT-licensed and could be shipped, but upstream publishes no binaries for it and
-Satellite does not build them yet, so for now you need to supply `libomt` (and `libvmx`)
-yourself — built from source, or taken from an
-[`omtplugin`](https://github.com/openmediatransport/omtplugin) install. Satellite looks
-beside its own binary first, then on the system library path. See
+**OMT** ships with Satellite. Upstream publishes no binaries, so Satellite builds `libomt`
+and `libvmx` from pinned sources and packages them beside the plugin — see
 [`lib/omt`](lib/omt/README.md).
+
+On **Linux**, OMT also needs the **Avahi daemon** running. libomt discovers sources through
+`avahi-client`, which aborts the process rather than returning an error if the daemon is
+missing, so Satellite declines to enable OMT without it instead of risking taking OBS down.
+Install and start `avahi-daemon`, or configure an OMT discovery server.
 
 ## Building
 
@@ -65,9 +64,15 @@ build, with Qt and the frontend API enabled. Neither transport runtime is needed
 both are resolved at run time.
 
 ```sh
+build-aux/build-omt              # builds libomt + libvmx into deps/omt
 cmake --preset ubuntu-x86_64     # or windows-x64, macos
 cmake --build --preset ubuntu-x86_64
 ```
+
+The first step needs the **.NET 8 SDK** and **clang** — `libomt` is C# compiled to a native
+library with NativeAOT. It is a build-time requirement only; nothing at run time needs .NET.
+Skip it and the plugin still builds, with OMT reporting itself unavailable. On Windows run
+`pwsh build-aux/Build-Omt.ps1` instead.
 
 Interface headers for both protocols are vendored: [`lib/ndi`](lib/ndi/README.md) (each file
 carries its own MIT licence, separate from the SDK) and [`lib/omt`](lib/omt/README.md) (MIT).

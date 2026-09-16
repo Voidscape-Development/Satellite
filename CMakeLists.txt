@@ -90,6 +90,57 @@ target_sources(
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
+# Ship libomt and libvmx beside the plugin binary, where the OMT backend looks first.
+#
+# Upstream publishes no binaries for either, so they are built from pinned sources by
+# build-aux/build-omt (or Build-Omt.ps1 on Windows) before this configures. If they are not
+# there the plugin still builds and runs - the Satellite window simply reports OMT as
+# unavailable, exactly as it does for a missing NDI runtime.
+set(
+  SATELLITE_OMT_LIBS_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/deps/omt"
+  CACHE PATH
+  "Directory holding prebuilt libomt and libvmx shared libraries"
+)
+
+if(OS_WINDOWS)
+  set(_omt_libs "libomt.dll" "libvmx.dll")
+elseif(OS_MACOS)
+  set(_omt_libs "libomt.dylib" "libvmx.dylib")
+else()
+  set(_omt_libs "libomt.so" "libvmx.so")
+endif()
+
+set(_omt_found "")
+foreach(_omt_lib IN LISTS _omt_libs)
+  if(EXISTS "${SATELLITE_OMT_LIBS_DIR}/${_omt_lib}")
+    list(APPEND _omt_found "${SATELLITE_OMT_LIBS_DIR}/${_omt_lib}")
+  endif()
+endforeach()
+
+list(LENGTH _omt_found _omt_found_count)
+list(LENGTH _omt_libs _omt_libs_count)
+
+if(_omt_found_count EQUAL _omt_libs_count)
+  message(STATUS "Satellite: bundling the OMT libraries from ${SATELLITE_OMT_LIBS_DIR}")
+
+  if(OS_WINDOWS)
+    install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit")
+  elseif(OS_MACOS)
+    # Inside the bundle next to the plugin binary, which is what @loader_path resolves to.
+    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES XCODE_EMBED_FRAMEWORKS "${_omt_found}")
+    install(FILES ${_omt_found} DESTINATION "$<TARGET_BUNDLE_CONTENT_DIR_NAME:${CMAKE_PROJECT_NAME}>/MacOS")
+  else()
+    install(FILES ${_omt_found} DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins)
+  endif()
+else()
+  message(
+    STATUS
+    "Satellite: no OMT libraries in ${SATELLITE_OMT_LIBS_DIR}; OMT will report itself "
+    "unavailable at run time. Run build-aux/build-omt to build them."
+  )
+endif()
+
 option(ENABLE_TESTS "Build Satellite's test harnesses" OFF)
 
 if(ENABLE_TESTS)

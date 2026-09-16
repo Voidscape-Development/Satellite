@@ -83,3 +83,11 @@ it. Nothing about either load path is mocked:
 These are fakes, so they prove Satellite drives each ABI correctly — not that the real
 libraries behave the way the fakes do. Timing, reconnection, genuine network behaviour and
 interop with real senders still need machines with the actual runtimes installed.
+
+The OMT side has been checked against the **real** library once, by hand: `build-aux/build-omt`
+produces a working `libomt`, Satellite's loader binds all sixteen entry points against it
+(the real library version-tags its exports as `omt_…@@V1.0`, and `dlsym` on the bare names
+resolves them), and discovery starts. A full send-to-receive loopback could not be completed
+in the sandbox, which has no IPv6 — libomt's socket setup fails with
+`SocketException (97): Address family not supported by protocol`. That is environmental, but
+it means the real round trip is still unverified.

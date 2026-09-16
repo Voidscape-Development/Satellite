@@ -27,6 +27,27 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Set up .NET 8 for OMT 🎛️
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build OMT Libraries 🛰️
+      shell: bash
+      working-directory: ${{ inputs.workingDirectory }}
+      run: |
+        : Build OMT Libraries 🛰️
+        echo ::group::Build OMT Libraries
+        # Upstream publishes no binaries for libomt or libvmx, so Satellite builds both from
+        # pinned sources. Without them the plugin still builds; OMT just reports itself
+        # unavailable at run time.
+        if [[ '${{ runner.os }}' == 'Windows' ]]; then
+          pwsh ./build-aux/Build-Omt.ps1
+        else
+          ./build-aux/build-omt
+        fi
+        echo ::endgroup::
+
     - name: Run macOS Build
       if: runner.os == 'macOS'
       shell: zsh --no-rcs --errexit --pipefail {0}

@@ -36,6 +36,31 @@ Prebuilt copies of both do exist inside the release packages of
 which is where the impression that upstream ships binaries comes from. Those are that
 project's packaging, not a library distribution.
 
-So Satellite has to either build both from source in CI or ship neither. Until that is
-settled, the OMT backend reports itself unavailable with the reason shown in the Satellite
-window, and everything else keeps working — see `docs/ARCHITECTURE.md` §11.
+**Satellite therefore builds both from source.** Run:
+
+```sh
+build-aux/build-omt              # Linux and macOS
+pwsh build-aux/Build-Omt.ps1     # Windows
+```
+
+which clones all three repositories at the commits pinned in `buildspec.json`, builds them,
+and leaves `libomt` and `libvmx` in `deps/omt/`. CMake installs whatever it finds there
+beside the plugin binary. CI runs this before configuring the plugin.
+
+If `deps/omt/` is empty the plugin still builds and runs — OMT simply reports itself
+unavailable, exactly as NDI does without its runtime.
+
+Two things that are easy to trip over:
+
+- `libomt` references `libomtnet` by a relative `HintPath`, so the two must be cloned as
+  siblings and `libomtnet` built first. Cloning `libomt` alone does not build.
+- `libvmx` does not compile with current clang — it initialises byte arrays from negative
+  literals, which older clang only warned about. Satellite's script adds
+  `-Wno-c++11-narrowing`; upstream's does not have it.
+
+## Avahi is required on Linux
+
+libomt discovers sources through `avahi-client`, which **aborts the process** if it cannot
+reach the daemon rather than returning an error. Satellite checks for the daemon before
+enabling OMT and declines to load without it, because the alternative is OBS dying mid-show
+with no diagnostic. See `docs/ARCHITECTURE.md` §11.2.

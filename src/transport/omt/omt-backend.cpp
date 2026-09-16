@@ -25,6 +25,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <chrono>
 #include <thread>
 
+#ifdef __linux__
+#include <unistd.h>
+#endif
+
 #include <obs-module.h>
 #include <plugin-support.h>
 #include <util/platform.h>
@@ -63,6 +67,24 @@ std::vector<std::string> omt_runtime_candidates()
 }
 
 namespace {
+
+#ifdef __linux__
+/// Whether the Avahi daemon is reachable.
+///
+/// On Linux libomt does DNS-SD discovery through avahi-client, and avahi-client does not
+/// report a missing daemon as an error - it fails an assertion and calls abort(), which in
+/// OBS means the whole application dies. It is not catchable, and libomt starts discovery
+/// lazily the first time a sender or receiver is created, so the abort would land in the
+/// middle of a show rather than at load.
+///
+/// The daemon's client socket is what avahi-client connects to, so its presence is the same
+/// question, asked safely. Verified the hard way: without a daemon,
+/// `omt_send_create` aborts with "avahi_service_browser_new: Assertion `client' failed".
+bool avahi_daemon_reachable()
+{
+	return access("/run/avahi-daemon/socket", F_OK) == 0 || access("/var/run/avahi-daemon/socket", F_OK) == 0;
+}
+#endif
 
 /// OMT timestamps are 100ns units, the same as NDI's.
 constexpr int64_t kOmtTicksPerNs = 100;
@@ -461,6 +483,20 @@ public:
 					      "how to install or build the OMT libraries.";
 			return false;
 		}
+
+#ifdef __linux__
+		// Only DNS-SD discovery goes through Avahi. With a discovery server configured
+		// libomt talks to that over TCP instead, so the daemon is not needed and refusing
+		// to load would be wrong.
+		if (Config::instance().omt_discovery_server.empty() && !avahi_daemon_reachable()) {
+			unavailable_reason_ = "the Avahi daemon is not running. libomt discovers sources "
+					      "through Avahi on Linux and aborts the process if it cannot "
+					      "reach the daemon, so OMT is disabled rather than risk taking "
+					      "OBS down. Start avahi-daemon, or set an OMT discovery server.";
+			library_.close();
+			return false;
+		}
+#endif
 
 		std::string missing;
 		if (!api_.bind(library_, missing)) {

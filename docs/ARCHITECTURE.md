@@ -1,8 +1,7 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.4** — design agreed, scaffolding landed, NDI and OMT both implemented
-> in both directions (M1–M3). How the OMT libraries are built and packaged is **unsettled**
-> — see §11.1. This document is the contract the
+> Status: **draft v0.5** — design agreed, scaffolding landed, NDI and OMT both implemented
+> in both directions, and the OMT libraries built from source and packaged (M1–M3). This document is the contract the
 > implementation is built against; change it in the same PR that changes the behaviour it
 > describes.
 
@@ -44,7 +43,7 @@ have to be rediscovered.
 |---|---|---|---|
 | 1 | First deliverable | Spec doc + compiling scaffolding | Reviewable shape before protocol code exists |
 | 2 | OBS UI shape | Unified types with a protocol dropdown | The point of the plugin is switching transport without rebuilding scenes |
-| 3 | OMT native libraries | ~~Bundle upstream prebuilt binaries~~ — **premise was wrong, see §11.1** | Upstream publishes no binaries at all, so there is nothing to bundle |
+| 3 | OMT native libraries | Build `libomt` and `libvmx` from pinned sources in CI and ship them | Upstream publishes no binaries at all, so the original "bundle prebuilt" answer was not available — see §11.1 |
 | 4 | Platforms | Windows, Linux, macOS | All three, Windows/Linux first through CI |
 | 5 | Metrics | Network + health with sparklines | Exact values both SDKs already expose; no charting dependency |
 | 6 | Tally | Full bidirectional | The main reason NDI gets used in multi-machine production |
@@ -349,18 +348,42 @@ Prebuilt copies do exist inside the release packages of `omtplugin`, the referen
 plugin — which is where the impression that upstream ships libraries comes from. Those are
 that project's packaging, not a library distribution.
 
-So there are three real options, none of which is the one that was chosen:
+**Satellite therefore builds both from source.** `build-aux/build-omt` (and
+`build-aux/Build-Omt.ps1` on Windows) clones all three repositories at commits pinned in
+`buildspec.json`, builds `libomtnet`, then `libomt` with NativeAOT, then `libvmx`, and leaves
+the two shared libraries in `deps/omt/`. CI runs it before configuring the plugin, and CMake
+installs whatever it finds beside the plugin binary — which is the first place the OMT
+backend looks. If the directory is empty the plugin still builds and runs, and OMT simply
+reports itself unavailable, exactly as NDI does without its runtime.
 
-| Option | Cost |
-|---|---|
-| **Build both from source in CI** | `libvmx` is straightforward C++. `libomt` needs the .NET 8 SDK and a NativeAOT build on all three runners, plus a universal build on macOS. This is the only route that ships working OMT out of the box — and it is exactly the CI complexity decision #3 was chosen to avoid. |
-| **Take the binaries from `omtplugin` releases** | No build work, but it pins Satellite to another project's packaging cadence and ships artifacts nobody here produced or verified. |
-| **Ship nothing and load what is there** | No build or CI work, and what the code does today. OMT simply reports itself unavailable unless the user supplies `libomt`, exactly as NDI does when its runtime is missing. |
+Two things that are easy to trip over, both found by actually running the build:
 
-Until this is settled the backend degrades cleanly: the Satellite window shows OMT as
-unavailable with the reason, and NDI and the rest of the plugin are unaffected. Nothing in
-`src/transport/omt/` changes depending on which option is taken — it is purely a build and
-packaging question.
+- **`libomt` references `libomtnet` by a relative `HintPath`**, so the two have to be cloned
+  as siblings and `libomtnet` built first. Cloning `libomt` alone does not build.
+- **`libvmx` does not compile with current clang.** It initialises byte arrays from negative
+  literals; older clang warned, clang 18+ rejects it. Upstream's own build script has no flag
+  for this, so Satellite's adds `-Wno-c++11-narrowing`.
+
+### 11.2 libomt aborts the process without an Avahi daemon
+
+On Linux libomt does DNS-SD discovery through `avahi-client`, and **avahi-client does not
+report a missing daemon as an error — it fails an assertion and calls `abort()`**:
+
+```
+avahi_service_browser_new: Assertion `client' failed.
+```
+
+Inside OBS that kills the whole application. It is not catchable, and libomt starts discovery
+lazily on the first sender or receiver, so the abort would land in the middle of a show
+rather than at load time.
+
+So the OMT backend checks for the daemon's client socket before declaring itself available,
+and declines to load with an explanatory message if it is absent. The check is skipped when a
+discovery server is configured, because that path uses TCP instead of Avahi and genuinely
+does not need the daemon.
+
+This is the one place Satellite refuses to use a library that is present and loadable. The
+alternative is a crash with no diagnostic in someone's production stream.
 
 ## 12. Licensing
 
@@ -387,7 +410,7 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 | **M0 — scaffolding** *(landed)* | Spec, renamed template, Qt + frontend API enabled, transport abstraction, stub backends, discovery service, feed registry, dock skeleton, source/filter/output registered. Compiles and loads; no protocol traffic. |
 | **M1 — NDI receive** *(landed)* | Vendored NDI 6 headers, runtime loader, real discovery, receiver with full frame conversion, Satellite Source pushing video and audio into OBS, dock showing live receive feeds, fake-runtime test harness |
 | **M2 — NDI send** *(landed)* | NDI sender, bounded send queue with a drop policy, Program and Preview outputs, Sender filter over a dedicated view, bidirectional tally, output controls in the dock |
-| **M3 — OMT parity** *(code landed; packaging open)* | Vendored `libomt.h`, runtime loader binding the flat C exports, OMT receiver and sender with full frame conversion, discovery, tally and exact statistics, fake-libomt test harness. The OMT libraries themselves are not yet built or shipped — §11.1. |
+| **M3 — OMT parity** *(landed)* | Vendored `libomt.h`, runtime loader binding the flat C exports, OMT receiver and sender with full frame conversion, discovery, tally and exact statistics, fake-libomt test harness, the libraries built from pinned sources and packaged, and the Avahi guard (§11.2) |
 | **M4 — polish** | DistroAV import, sparklines and full metrics, advanced per-protocol settings, install-helper flows |
 | **M5 — release** | Three-platform CI packaging, codesigning/notarization, docs |
 
