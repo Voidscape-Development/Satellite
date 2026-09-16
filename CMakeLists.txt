@@ -69,6 +69,7 @@ target_sources(
     src/obs/satellite-output.hpp
     src/obs/distroav-import.cpp
     src/obs/distroav-import.hpp
+    src/obs/obs-compat.hpp
     src/obs/satellite-source.cpp
     src/obs/satellite-source.hpp
     src/obs/sender-session.cpp

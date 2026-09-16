@@ -78,6 +78,10 @@ These are all real, and each cost a CI round trip to find:
 - **No semicolons in `buildspec.json`.** `cmake/common/bootstrap.cmake` passes the file to
   `string(JSON ...)` unquoted, so a semicolon anywhere splits it into a CMake list and every
   lookup in it fails with a confusing `VERSION "NOTFOUND"` error.
+- **CI builds against OBS 31.1.1, not your system libobs.** Distributions still package
+  30.x, so a plugin that compiles locally can fail CI on APIs deprecated in between — with
+  `-Werror`, a deprecation *is* a build failure. `src/obs/obs-compat.hpp` wraps the calls
+  that differ so both versions build.
 - **`plugin-support.h` must not declare `blogva`.** libobs declares it with `EXPORT`, which
   is `__declspec(dllimport)` on MSVC, so a bare declaration in a header makes every C++ file
   that also includes the obs headers fail with "redefinition; different linkage". The
