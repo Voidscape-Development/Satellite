@@ -12,9 +12,11 @@ SPDX-License-Identifier: GPL-2.0-or-later
 // proprietary runtime installed. Building this against the same header Satellite compiles
 // against is the point: if Satellite's use of the ABI is wrong, this catches it.
 
-#include <cstring>
-#include <cstdlib>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
 
 #include <Processing.NDI.Lib.h>
 
@@ -212,9 +214,109 @@ int fake_recv_get_no_connections(NDIlib_recv_instance_t)
 	return 1;
 }
 
+struct FakeSend {
+	int dummy = 0;
+};
+
 NDIlib_v6 g_lib;
 
 } // namespace
+
+/// What the fake has been asked to send. The test reads this back by dlopen'ing the same
+/// library, which returns the handle the backend already holds and therefore the same globals.
+extern "C" struct FakeSendLog {
+	int created;
+	int destroyed;
+	char last_name[256];
+	int video_frames;
+	int audio_frames;
+	int last_fourcc;
+	int last_xres;
+	int last_yres;
+	int last_stride;
+	long long last_video_timecode;
+	int last_audio_fourcc;
+	int last_audio_channels;
+	int last_audio_samples;
+	int last_audio_stride;
+	int last_audio_rate;
+};
+
+namespace {
+
+FakeSendLog g_send_log;
+
+NDIlib_send_instance_t fake_send_create(const NDIlib_send_create_t *settings)
+{
+	++g_send_log.created;
+	if (settings && settings->p_ndi_name) {
+		strncpy(g_send_log.last_name, settings->p_ndi_name, sizeof(g_send_log.last_name) - 1);
+		g_send_log.last_name[sizeof(g_send_log.last_name) - 1] = '\0';
+	}
+	return reinterpret_cast<NDIlib_send_instance_t>(new FakeSend());
+}
+
+void fake_send_destroy(NDIlib_send_instance_t instance)
+{
+	++g_send_log.destroyed;
+	delete reinterpret_cast<FakeSend *>(instance);
+}
+
+void fake_send_send_video_v2(NDIlib_send_instance_t, const NDIlib_video_frame_v2_t *frame)
+{
+	if (!frame)
+		return;
+
+	// FAKE_NDI_SEND_DELAY_MS stands in for a network that cannot keep up, which is the only
+	// condition under which SenderSession's queue overflows and its drop policy runs.
+	if (const char *delay = getenv("FAKE_NDI_SEND_DELAY_MS")) {
+		const int ms = atoi(delay);
+		if (ms > 0)
+			std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+	}
+
+	++g_send_log.video_frames;
+	g_send_log.last_fourcc = static_cast<int>(frame->FourCC);
+	g_send_log.last_xres = frame->xres;
+	g_send_log.last_yres = frame->yres;
+	g_send_log.last_stride = frame->line_stride_in_bytes;
+	g_send_log.last_video_timecode = static_cast<long long>(frame->timecode);
+}
+
+void fake_send_send_audio_v3(NDIlib_send_instance_t, const NDIlib_audio_frame_v3_t *frame)
+{
+	if (!frame)
+		return;
+	++g_send_log.audio_frames;
+	g_send_log.last_audio_fourcc = static_cast<int>(frame->FourCC);
+	g_send_log.last_audio_channels = frame->no_channels;
+	g_send_log.last_audio_samples = frame->no_samples;
+	g_send_log.last_audio_stride = frame->channel_stride_in_bytes;
+	g_send_log.last_audio_rate = frame->sample_rate;
+}
+
+bool fake_send_get_tally(NDIlib_send_instance_t, NDIlib_tally_t *tally, uint32_t)
+{
+	if (tally) {
+		tally->on_program = true;
+		tally->on_preview = false;
+	}
+	return true;
+}
+
+int fake_send_get_no_connections(NDIlib_send_instance_t, uint32_t)
+{
+	return 2;
+}
+
+} // namespace
+
+// The project builds with -fvisibility=hidden, and unlike the SDK's own entry points (which
+// the header marks visible) this one needs saying so explicitly, or the test cannot dlsym it.
+extern "C" __attribute__((visibility("default"))) const FakeSendLog *fake_ndi_send_log(void)
+{
+	return &g_send_log;
+}
 
 extern "C" const NDIlib_v6 *NDIlib_v6_load(void)
 {
@@ -239,6 +341,13 @@ extern "C" const NDIlib_v6 *NDIlib_v6_load(void)
 	g_lib.recv_set_tally = fake_recv_set_tally;
 	g_lib.recv_get_performance = fake_recv_get_performance;
 	g_lib.recv_get_no_connections = fake_recv_get_no_connections;
+
+	g_lib.send_create = fake_send_create;
+	g_lib.send_destroy = fake_send_destroy;
+	g_lib.send_send_video_v2 = fake_send_send_video_v2;
+	g_lib.send_send_audio_v3 = fake_send_send_audio_v3;
+	g_lib.send_get_tally = fake_send_get_tally;
+	g_lib.send_get_no_connections = fake_send_get_no_connections;
 
 	return &g_lib;
 }

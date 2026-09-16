@@ -180,6 +180,142 @@ size_t video_frame_bytes(const NDIlib_video_frame_v2_t &frame)
 	return static_cast<size_t>(frame.line_stride_in_bytes) * static_cast<size_t>(frame.yres);
 }
 
+/// The reverse of fill_video_frame, for the send path.
+///
+/// Senders ask OBS to convert to UYVY before the frame ever reaches us, so the first case is
+/// the one that runs; the rest exist so an alpha-bearing or unconverted frame is not silently
+/// dropped.
+bool fourcc_for_format(video_format format, NDIlib_FourCC_video_type_e &out)
+{
+	switch (format) {
+	case VIDEO_FORMAT_UYVY:
+		out = NDIlib_FourCC_video_type_UYVY;
+		return true;
+	case VIDEO_FORMAT_BGRA:
+		out = NDIlib_FourCC_video_type_BGRA;
+		return true;
+	case VIDEO_FORMAT_BGRX:
+		out = NDIlib_FourCC_video_type_BGRX;
+		return true;
+	case VIDEO_FORMAT_RGBA:
+		out = NDIlib_FourCC_video_type_RGBA;
+		return true;
+	case VIDEO_FORMAT_NV12:
+		out = NDIlib_FourCC_video_type_NV12;
+		return true;
+	case VIDEO_FORMAT_I420:
+		out = NDIlib_FourCC_video_type_I420;
+		return true;
+	default:
+		return false;
+	}
+}
+
+class NdiSender final : public ISender {
+public:
+	NdiSender(const NDIlib_v6 *ndi, NDIlib_send_instance_t instance) : ndi_(ndi), instance_(instance) {}
+
+	~NdiSender() override
+	{
+		if (instance_)
+			ndi_->send_destroy(instance_);
+	}
+
+	bool send_video(const VideoFrame &frame) override
+	{
+		NDIlib_FourCC_video_type_e fourcc;
+		if (!fourcc_for_format(frame.format, fourcc)) {
+			obs_log(LOG_WARNING, "cannot send OBS video format %d over NDI",
+				static_cast<int>(frame.format));
+			return false;
+		}
+
+		NDIlib_video_frame_v2_t ndi_frame = {};
+		ndi_frame.xres = static_cast<int>(frame.width);
+		ndi_frame.yres = static_cast<int>(frame.height);
+		ndi_frame.FourCC = fourcc;
+		ndi_frame.frame_rate_N = static_cast<int>(frame.framerate_num);
+		ndi_frame.frame_rate_D = static_cast<int>(frame.framerate_den);
+		ndi_frame.picture_aspect_ratio = 0.0f; // 0 means "derive from resolution".
+		ndi_frame.frame_format_type = frame.interlaced ? NDIlib_frame_format_type_interleaved
+							       : NDIlib_frame_format_type_progressive;
+		ndi_frame.p_data = frame.data[0];
+		ndi_frame.line_stride_in_bytes = static_cast<int>(frame.linesize[0]);
+
+		// OBS timestamps are nanoseconds and NDI wants 100ns units. Handing NDI the real
+		// timestamp keeps a receiver's A/V sync tied to OBS's own clock; synthesize is the
+		// fallback that lets NDI stamp it instead.
+		ndi_frame.timecode = frame.timestamp_ns > 0 ? static_cast<int64_t>(frame.timestamp_ns / 100)
+							    : NDIlib_send_timecode_synthesize;
+
+		// Synchronous rather than send_send_video_async_v2: the async variant requires the
+		// buffer to stay valid until the *next* async call, and this already runs on a
+		// dedicated send thread where blocking costs nothing. Worth revisiting with double
+		// buffering if profiling ever says so.
+		ndi_->send_send_video_v2(instance_, &ndi_frame);
+
+		rate_.add_frame(video_frame_bytes(ndi_frame));
+		return true;
+	}
+
+	bool send_audio(const AudioFrame &frame) override
+	{
+		if (frame.channels == 0 || frame.frames == 0)
+			return false;
+
+		NDIlib_audio_frame_v3_t ndi_frame = {};
+		ndi_frame.sample_rate = static_cast<int>(frame.sample_rate);
+		ndi_frame.no_channels = static_cast<int>(frame.channels);
+		ndi_frame.no_samples = static_cast<int>(frame.frames);
+		ndi_frame.FourCC = NDIlib_FourCC_audio_type_FLTP;
+		ndi_frame.p_data = frame.data[0];
+
+		// OBS planar float is already NDI's FLTP layout, so the planes go out untouched.
+		// They are contiguous in the queue buffer, which is what channel_stride describes.
+		ndi_frame.channel_stride_in_bytes = static_cast<int>(frame.frames * sizeof(float));
+
+		ndi_frame.timecode = frame.timestamp_ns > 0 ? static_cast<int64_t>(frame.timestamp_ns / 100)
+							    : NDIlib_send_timecode_synthesize;
+
+		ndi_->send_send_audio_v3(instance_, &ndi_frame);
+		return true;
+	}
+
+	Tally tally() const override
+	{
+		NDIlib_tally_t ndi_tally = {};
+
+		// Zero timeout: this is polled from the send thread between frames, so it must not
+		// block waiting for a downstream receiver to say something.
+		ndi_->send_get_tally(instance_, &ndi_tally, 0);
+
+		Tally tally;
+		tally.program = ndi_tally.on_program;
+		tally.preview = ndi_tally.on_preview;
+		return tally;
+	}
+
+	int connections() const override { return ndi_->send_get_no_connections(instance_, 0); }
+
+	FeedStats stats() const override
+	{
+		FeedStats stats;
+
+		// NDI reports nothing about what a sender has sent, so everything here is measured
+		// locally and flagged, exactly as on the receive side.
+		stats.bitrate_mbps = rate_.mbps();
+		stats.bitrate_estimated = true;
+		stats.fps = rate_.fps();
+		stats.connections = connections();
+		return stats;
+	}
+
+private:
+	const NDIlib_v6 *ndi_ = nullptr;
+	NDIlib_send_instance_t instance_ = nullptr;
+	RateMeter rate_;
+};
+
 class NdiReceiver final : public IReceiver {
 public:
 	NdiReceiver(const NDIlib_v6 *ndi, NDIlib_recv_instance_t instance) : ndi_(ndi), instance_(instance) {}
@@ -468,8 +604,32 @@ public:
 		return std::make_unique<NdiReceiver>(ndi_, instance);
 	}
 
-	/// M2: NDIlib_send_create and the send path.
-	std::unique_ptr<ISender> create_sender(const SenderConfig &) override { return nullptr; }
+	std::unique_ptr<ISender> create_sender(const SenderConfig &config) override
+	{
+		if (!available_ || config.name.empty())
+			return nullptr;
+
+		const Config &plugin_config = Config::instance();
+
+		NDIlib_send_create_t settings = {};
+
+		// NDI presents this on the network as "MACHINE (name)" - the machine prefix is the
+		// runtime's doing, not ours, so the bare name is what goes in here.
+		settings.p_ndi_name = config.name.c_str();
+		settings.p_groups = plugin_config.ndi_groups.empty() ? nullptr : plugin_config.ndi_groups.c_str();
+
+		// OBS already paces frames, so letting NDI clock them as well would fight it.
+		settings.clock_video = false;
+		settings.clock_audio = false;
+
+		NDIlib_send_instance_t instance = ndi_->send_create(&settings);
+		if (!instance) {
+			obs_log(LOG_WARNING, "could not create an NDI sender named '%s'", config.name.c_str());
+			return nullptr;
+		}
+
+		return std::make_unique<NdiSender>(ndi_, instance);
+	}
 
 private:
 	bool create_finder()

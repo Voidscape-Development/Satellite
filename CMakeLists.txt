@@ -69,6 +69,8 @@ target_sources(
     src/obs/satellite-output.hpp
     src/obs/satellite-source.cpp
     src/obs/satellite-source.hpp
+    src/obs/sender-session.cpp
+    src/obs/sender-session.hpp
     src/transport/library-loader.cpp
     src/transport/library-loader.hpp
     src/transport/ndi/ndi-backend.cpp

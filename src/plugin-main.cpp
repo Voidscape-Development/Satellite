@@ -44,16 +44,17 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 		satellite::update_frontend_outputs();
 		break;
 
-	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
 	case OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED:
-		satellite::broadcast_tally();
+		// The Preview sender renders through a view of its own, so it has to be pointed
+		// at the new scene. Outbound tally needs nothing here: sources track their own
+		// program/preview state through OBS's activate/show callbacks.
+		satellite::update_frontend_outputs();
 		break;
 
 	case OBS_FRONTEND_EVENT_STUDIO_MODE_ENABLED:
 	case OBS_FRONTEND_EVENT_STUDIO_MODE_DISABLED:
 		// The Preview sender only exists while Studio Mode is on.
 		satellite::update_frontend_outputs();
-		satellite::broadcast_tally();
 		break;
 
 	case OBS_FRONTEND_EVENT_EXIT:

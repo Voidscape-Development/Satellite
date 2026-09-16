@@ -18,14 +18,21 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "ui/satellite-dock.hpp"
 
+#include "config/config.hpp"
 #include "discovery/discovery-service.hpp"
 #include "metrics/feed-registry.hpp"
+#include "obs/satellite-output.hpp"
 #include "transport/transport.hpp"
 #include "ui/sparkline.hpp"
 
+#include <QCheckBox>
+#include <QComboBox>
+#include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -73,6 +80,77 @@ QString tally_text(const Tally &tally)
 
 } // namespace
 
+OutputControls::OutputControls(const QString &title, QWidget *parent) : QWidget(parent)
+{
+	auto *layout = new QHBoxLayout(this);
+	layout->setContentsMargins(0, 0, 0, 0);
+	layout->setSpacing(6);
+
+	enabled_ = new QCheckBox(title, this);
+	enabled_->setMinimumWidth(70);
+
+	name_ = new QLineEdit(this);
+	name_->setPlaceholderText(obs_module_text("Satellite.Output.NamePlaceholder"));
+
+	protocol_ = new QComboBox(this);
+	for (Protocol value : kAllProtocols)
+		protocol_->addItem(QString::fromUtf8(protocol_display_name(value)),
+				   QString::fromUtf8(protocol_id(value)));
+
+	audio_ = new QCheckBox(obs_module_text("Satellite.Output.Audio"), this);
+
+	layout->addWidget(enabled_);
+	layout->addWidget(name_, 1);
+	layout->addWidget(protocol_);
+	layout->addWidget(audio_);
+
+	// The name is meaningless while the sender is off, so grey it out rather than letting
+	// someone type into a field that does nothing.
+	connect(enabled_, &QCheckBox::toggled, this, [this](bool on) {
+		name_->setEnabled(on);
+		protocol_->setEnabled(on);
+		audio_->setEnabled(on);
+		emit changed();
+	});
+
+	connect(name_, &QLineEdit::editingFinished, this, &OutputControls::changed);
+	connect(protocol_, &QComboBox::currentIndexChanged, this, &OutputControls::changed);
+	connect(audio_, &QCheckBox::toggled, this, &OutputControls::changed);
+}
+
+void OutputControls::load(const OutputConfig &config)
+{
+	// Block signals so populating the widgets does not look like the user editing them,
+	// which would write the config back and restart the sender on every refresh.
+	const QSignalBlocker block_enabled(enabled_);
+	const QSignalBlocker block_name(name_);
+	const QSignalBlocker block_protocol(protocol_);
+	const QSignalBlocker block_audio(audio_);
+
+	enabled_->setChecked(config.enabled);
+	name_->setText(QString::fromStdString(config.name));
+	audio_->setChecked(config.send_audio);
+
+	const int index = protocol_->findData(QString::fromUtf8(protocol_id(config.protocol)));
+	if (index >= 0)
+		protocol_->setCurrentIndex(index);
+
+	name_->setEnabled(config.enabled);
+	protocol_->setEnabled(config.enabled);
+	audio_->setEnabled(config.enabled);
+}
+
+void OutputControls::store(OutputConfig &config) const
+{
+	config.enabled = enabled_->isChecked();
+	config.name = name_->text().toStdString();
+	config.send_audio = audio_->isChecked();
+
+	Protocol protocol = Protocol::NDI;
+	if (protocol_from_id(protocol_->currentData().toString().toUtf8().constData(), protocol))
+		config.protocol = protocol;
+}
+
 SatelliteDock::SatelliteDock(QWidget *parent) : QWidget(parent)
 {
 	setObjectName(QStringLiteral("SatelliteDock"));
@@ -82,6 +160,7 @@ SatelliteDock::SatelliteDock(QWidget *parent) : QWidget(parent)
 	layout->setSpacing(6);
 
 	buildRuntimeStatus(layout);
+	buildOutputControls(layout);
 	buildFeedTable(layout);
 
 	timer_ = new QTimer(this);
@@ -113,6 +192,48 @@ void SatelliteDock::buildRuntimeStatus(QVBoxLayout *layout)
 	group_layout->addWidget(omtStatus_);
 
 	layout->addWidget(group);
+}
+
+void SatelliteDock::buildOutputControls(QVBoxLayout *layout)
+{
+	auto *group = new QGroupBox(obs_module_text("Satellite.Dock.Outputs"), this);
+	auto *group_layout = new QVBoxLayout(group);
+	group_layout->setContentsMargins(8, 6, 8, 6);
+	group_layout->setSpacing(4);
+
+	program_ = new OutputControls(obs_module_text("Satellite.Output.Program"), group);
+	preview_ = new OutputControls(obs_module_text("Satellite.Output.Preview"), group);
+
+	const Config &config = Config::instance();
+	program_->load(config.program);
+	preview_->load(config.preview);
+
+	connect(program_, &OutputControls::changed, this, &SatelliteDock::applyOutputSettings);
+	connect(preview_, &OutputControls::changed, this, &SatelliteDock::applyOutputSettings);
+
+	auto *note = new QLabel(obs_module_text("Satellite.Output.PreviewNote"), group);
+	note->setWordWrap(true);
+	QFont note_font = note->font();
+	note_font.setPointSizeF(note_font.pointSizeF() * 0.9);
+	note->setFont(note_font);
+	note->setEnabled(false);
+
+	group_layout->addWidget(program_);
+	group_layout->addWidget(preview_);
+	group_layout->addWidget(note);
+
+	layout->addWidget(group);
+}
+
+void SatelliteDock::applyOutputSettings()
+{
+	Config &config = Config::instance();
+
+	program_->store(config.program);
+	preview_->store(config.preview);
+
+	config.save();
+	update_frontend_outputs();
 }
 
 void SatelliteDock::buildFeedTable(QVBoxLayout *layout)

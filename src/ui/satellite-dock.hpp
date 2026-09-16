@@ -20,12 +20,40 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <QWidget>
 
+class QCheckBox;
+class QComboBox;
 class QLabel;
+class QLineEdit;
 class QTimer;
 class QTreeWidget;
 class QVBoxLayout;
 
 namespace satellite {
+
+struct OutputConfig;
+
+/// The enable / name / protocol / audio row for one of the two frontend senders.
+///
+/// The Program and Preview senders are configured here rather than in a source's properties,
+/// because they belong to the whole OBS instance rather than to any one scene item.
+class OutputControls : public QWidget {
+	Q_OBJECT
+
+public:
+	OutputControls(const QString &title, QWidget *parent = nullptr);
+
+	void load(const OutputConfig &config);
+	void store(OutputConfig &config) const;
+
+signals:
+	void changed();
+
+private:
+	QCheckBox *enabled_ = nullptr;
+	QLineEdit *name_ = nullptr;
+	QComboBox *protocol_ = nullptr;
+	QCheckBox *audio_ = nullptr;
+};
 
 /// The Satellite window: runtime status for each protocol, and a live table of every feed
 /// in either direction.
@@ -40,9 +68,11 @@ public:
 
 private slots:
 	void refresh();
+	void applyOutputSettings();
 
 private:
 	void buildRuntimeStatus(QVBoxLayout *layout);
+	void buildOutputControls(QVBoxLayout *layout);
 	void buildFeedTable(QVBoxLayout *layout);
 	void refreshRuntimeStatus();
 	void refreshFeedTable();
@@ -52,6 +82,9 @@ private:
 	QLabel *summary_ = nullptr;
 	QTreeWidget *feeds_ = nullptr;
 	QTimer *timer_ = nullptr;
+
+	OutputControls *program_ = nullptr;
+	OutputControls *preview_ = nullptr;
 };
 
 /// Creates the dock, registers it with the frontend, and adds the Tools menu entry that

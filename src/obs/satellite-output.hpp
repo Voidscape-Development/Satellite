@@ -31,8 +31,4 @@ void update_frontend_outputs();
 /// Tears down both frontend senders. Called on module unload and on frontend exit.
 void shutdown_frontend_outputs();
 
-/// Pushes OBS's current program/preview state out to every active Satellite sender, so a
-/// remote source knows whether it is live here.
-void broadcast_tally();
-
 } // namespace satellite

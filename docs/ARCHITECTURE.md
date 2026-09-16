@@ -1,7 +1,7 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.2** — design agreed, scaffolding landed, NDI receive implemented (M1).
-> OMT and the send paths are not yet implemented. This document is the contract the
+> Status: **draft v0.3** — design agreed, scaffolding landed, NDI receive and send
+> implemented (M1, M2). OMT is not yet implemented. This document is the contract the
 > implementation is built against; change it in the same PR that changes the behaviour it
 > describes.
 
@@ -209,7 +209,7 @@ release, so the rule is enforced by scope rather than by discipline.
 |---|---|---|
 | Discovery | `DiscoveryService`, one process-wide | Round-robins backends: `wait_for_sources(~1000 ms)` then `poll_sources()`, merges into the registry, signals changes |
 | Receive | one per active Satellite Source | `capture()` loop, pushes into OBS |
-| Send | one per active sender (filter or output) | Drains a bounded queue into `send_video`/`send_audio` |
+| Send | one per active sender (filter or output) | Drains a bounded queue into `send_video`/`send_audio`, and polls tally and counters |
 | Tally poll | folded into the send thread | `send_gettally` with a short timeout |
 | UI | Qt main thread | Reads registry snapshots on a timer; never blocks on a backend call |
 
@@ -251,13 +251,19 @@ Preview sender starts only when Studio Mode is active.
 
 ### 7.4 Tally
 
-Bidirectional, per decision #6:
+Bidirectional, per decision #6. Note which side does which — it is the opposite of what the
+names suggest, because in both protocols it is the *receiver* that reports tally upstream:
 
-- **Outbound** — Satellite senders publish OBS program/preview state upstream, driven by
-  `OBS_FRONTEND_EVENT_SCENE_CHANGED` / `_PREVIEW_SCENE_CHANGED` and studio-mode events.
-- **Inbound** — Satellite sources report the tally the remote sender sees, surfaced in the
-  dock, and pushed back out with `NDIlib_recv_set_tally` / `omt_receive_settally` so a
-  remote camera knows it is live in this OBS.
+- **Outbound, from our sources.** A Satellite Source tells the remote sender whether this
+  OBS has it on program or preview, via `NDIlib_recv_set_tally` / `omt_receive_settally`.
+  That is how a remote camera learns it is live here. It is driven by OBS's own `activate`
+  /`deactivate` (program) and `show`/`hide` (visible anywhere, which includes the Studio
+  Mode preview) source callbacks, so it is event-driven and nothing walks the scene graph on
+  a timer. A source on program is also "showing", so preview is reported only when showing
+  and *not* active.
+- **Inbound, at our senders.** A Satellite sender polls `send_get_tally` /
+  `omt_send_gettally` from its send thread to learn whether a downstream receiver has *us*
+  on program, and surfaces it in the dock.
 
 ## 8. The Satellite window
 
@@ -352,7 +358,7 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 |---|---|
 | **M0 — scaffolding** *(landed)* | Spec, renamed template, Qt + frontend API enabled, transport abstraction, stub backends, discovery service, feed registry, dock skeleton, source/filter/output registered. Compiles and loads; no protocol traffic. |
 | **M1 — NDI receive** *(landed)* | Vendored NDI 6 headers, runtime loader, real discovery, receiver with full frame conversion, Satellite Source pushing video and audio into OBS, dock showing live receive feeds, fake-runtime test harness |
-| **M2 — NDI send** | Sender filter, Program/Preview outputs, bidirectional tally |
+| **M2 — NDI send** *(landed)* | NDI sender, bounded send queue with a drop policy, Program and Preview outputs, Sender filter over a dedicated view, bidirectional tally, output controls in the dock |
 | **M3 — OMT parity** | `libomt` loader, vendored binaries, OMT source/filter/output, unified discovery |
 | **M4 — polish** | DistroAV import, sparklines and full metrics, advanced per-protocol settings, install-helper flows |
 | **M5 — release** | Three-platform CI packaging, codesigning/notarization, docs |
@@ -365,8 +371,9 @@ Not blocking M0/M1; worth settling before the milestone that needs them.
    entry point bound, and the runtime search uses `NDILIB_REDIST_FOLDER` /
    `NDILIB_LIBRARY_NAME` from the vendored headers so it tracks the SDK version rather than
    hard-coding paths.
-2. **Sender naming** — DistroAV uses `MACHINE (source name)`. Keep that convention for
-   familiarity, or make it a template string? (M2)
+2. ~~**Sender naming**~~ — settled, and it turned out not to be a choice: NDI itself
+   presents a sender as `MACHINE (name)`. The machine prefix is the runtime's doing, so
+   Satellite passes the bare name and gets DistroAV's convention for free.
 3. **Per-feed CPU** — deliberately excluded from decision #5. OMT hands us `CodecTime` for
    free, which is most of the value. Add real per-thread CPU later, or leave it? (M4)
 4. **Failover** — should a source be able to hold both an NDI and an OMT address and fall

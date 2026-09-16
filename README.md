@@ -5,9 +5,9 @@ machines on a local network, over **either NDI or OMT ([Open Media
 Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
 source/filter/output types and one management window.
 
-> **Status: early development.** **NDI receiving works** — add a Satellite Source, pick an
-> NDI feed, and it plays in OBS with audio. Sending and all OMT support are not implemented
-> yet. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
+> **Status: early development.** **NDI works in both directions** — receive a feed into OBS,
+> or publish your Program, Preview, or any single source onto the network, with tally.
+> OMT is not implemented yet. See [the roadmap](docs/ARCHITECTURE.md#13-roadmap).
 
 ## Why
 
@@ -18,22 +18,24 @@ plugin.
 
 ## Features
 
-**Working today**
+**Working today, over NDI**
 
-- **Satellite Source over NDI** — discovers feeds on the network, receives video and audio,
-  and shows them live in the Satellite window with bitrate, dropped frames and format
-
-**Planned, shared across both protocols**
-
-- **Satellite Source over OMT** — the same source type, with the protocol dropdown switched
-- **Satellite Sender** — a filter that publishes any source on the network, video and audio
-- **Program and Preview outputs** — independently configurable, Preview follows Studio Mode
-- **Full bidirectional tally** — publish OBS's program/preview state upstream, and surface
-  the tally your sources report
+- **Satellite Source** — discovers feeds on the network and receives video and audio
+- **Satellite Sender** — a filter that publishes any source on the network. It renders the
+  source through a view of its own rather than intercepting async frames, so it works on
+  game capture, browser sources and scenes, not just cameras and media files
+- **Program and Preview outputs** — independently configurable from the Satellite window;
+  Preview runs only while Studio Mode is active
+- **Full bidirectional tally** — your sources tell remote senders when they are live here,
+  and your senders show whether someone downstream has you on air
 - **The Satellite window** — an OBS dock listing every active feed in either direction with
   its state, format, bitrate, dropped frames and a rolling history sparkline
 - **Runtime status** — whether each protocol's library is present, with an install link for
   NDI
+
+**Planned**
+
+- **All of the above over OMT** — the same types, with the protocol dropdown switched
 - **DistroAV import** — a one-time, non-destructive offer to convert an existing setup
 
 ## Installing the runtimes
@@ -67,7 +69,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 The NDI runtime can't be installed in CI, so the test suite builds a fake one against the
-same vendored headers and drives the real loader against it. See [`tests/`](tests/README.md).
+same vendored headers and drives the real loader against it — including a slow-sink mode
+that exercises what the send queue does under backpressure. See [`tests/`](tests/README.md).
 
 ## Documentation
 

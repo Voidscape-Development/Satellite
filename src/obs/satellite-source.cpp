@@ -55,7 +55,33 @@ struct SourceContext {
 	std::thread thread;
 	std::atomic<bool> running{false};
 	uint64_t feed_id = 0;
+
+	// Outbound tally. OBS calls activate/deactivate when a source goes on and off program,
+	// and show/hide when it becomes visible anywhere - which includes the Studio Mode
+	// preview. Tracking both is how a remote camera learns it is live in this OBS, and it
+	// is event-driven, so nothing has to walk the scene graph on a timer.
+	std::atomic<bool> on_program{false};
+	std::atomic<bool> on_preview{false};
 };
+
+/// Pushes this source's program/preview state upstream to whoever is sending to us.
+void publish_tally(SourceContext *context)
+{
+	if (!context->receiver)
+		return;
+
+	Tally tally;
+	tally.program = context->on_program.load(std::memory_order_acquire);
+
+	// "Showing but not active" is the Studio Mode preview. A source on program is also
+	// showing, so without this a live source would report both at once.
+	tally.preview = context->on_preview.load(std::memory_order_acquire) && !tally.program;
+
+	context->receiver->set_tally(tally);
+
+	if (context->feed_id)
+		FeedRegistry::instance().set_tally(context->feed_id, tally);
+}
 
 void stop_receiving(SourceContext *context)
 {
@@ -278,6 +304,38 @@ void start_receiving(SourceContext *context)
 
 	context->running.store(true, std::memory_order_release);
 	context->thread = std::thread(receive_loop, context);
+
+	// A receiver starts with tally off, so re-publish whatever OBS already told us - the
+	// source may well have been on program before its settings changed.
+	publish_tally(context);
+}
+
+void source_activate(void *data)
+{
+	auto *context = static_cast<SourceContext *>(data);
+	context->on_program.store(true, std::memory_order_release);
+	publish_tally(context);
+}
+
+void source_deactivate(void *data)
+{
+	auto *context = static_cast<SourceContext *>(data);
+	context->on_program.store(false, std::memory_order_release);
+	publish_tally(context);
+}
+
+void source_show(void *data)
+{
+	auto *context = static_cast<SourceContext *>(data);
+	context->on_preview.store(true, std::memory_order_release);
+	publish_tally(context);
+}
+
+void source_hide(void *data)
+{
+	auto *context = static_cast<SourceContext *>(data);
+	context->on_preview.store(false, std::memory_order_release);
+	publish_tally(context);
 }
 
 const char *source_get_name(void *)
@@ -442,6 +500,10 @@ void register_satellite_source()
 	info.update = source_update;
 	info.get_defaults = source_defaults;
 	info.get_properties = source_properties;
+	info.activate = source_activate;
+	info.deactivate = source_deactivate;
+	info.show = source_show;
+	info.hide = source_hide;
 
 	obs_register_source(&info);
 }

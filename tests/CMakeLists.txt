@@ -44,3 +44,21 @@ add_dependencies(ndi-backend-test fake-ndi)
 
 add_test(NAME ndi-backend COMMAND ndi-backend-test)
 set_tests_properties(ndi-backend PROPERTIES ENVIRONMENT "NDI_RUNTIME_DIR_V6=${CMAKE_CURRENT_BINARY_DIR}/runtime")
+
+add_executable(
+  sender-test
+  sender-test.cpp
+  "${CMAKE_SOURCE_DIR}/src/metrics/feed-registry.cpp"
+  "${CMAKE_SOURCE_DIR}/src/obs/sender-session.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/library-loader.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/ndi/ndi-backend.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/omt/omt-backend.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/transport.cpp"
+)
+target_include_directories(sender-test PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/lib/ndi")
+target_compile_features(sender-test PRIVATE cxx_std_17)
+target_link_libraries(sender-test PRIVATE OBS::libobs ${CMAKE_DL_LIBS})
+add_dependencies(sender-test fake-ndi)
+
+add_test(NAME sender COMMAND sender-test)
+set_tests_properties(sender PROPERTIES ENVIRONMENT "NDI_RUNTIME_DIR_V6=${CMAKE_CURRENT_BINARY_DIR}/runtime")
