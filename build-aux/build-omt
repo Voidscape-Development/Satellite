@@ -126,6 +126,11 @@ if [ "$platform" = macos ]; then
     install_name_tool -id @rpath/libomt.dylib "$output_dir/libomt.dylib"
     # So libomt finds libvmx sitting next to it inside the plugin bundle.
     install_name_tool -add_rpath @loader_path "$output_dir/libomt.dylib" 2>/dev/null || true
+
+    # Ad-hoc sign both. install_name_tool invalidates any existing signature, and codesign
+    # refuses to seal a bundle containing nested code that is not signed at all.
+    codesign --force --sign - "$output_dir/libomt.dylib"
+    codesign --force --sign - "$output_dir/libvmx.dylib"
 else
     dotnet publish "$work_dir/libomt/libomt.sln" -r linux-x64 -c Release --nologo -v quiet
     cp "$work_dir/libomt/bin/Release/net8.0/linux-x64/native/libomt.so" "$output_dir/libomt.so"

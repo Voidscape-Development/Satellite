@@ -46,6 +46,14 @@ endif()
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
 
+if(OS_WINDOWS)
+  # libomt.h carries #pragma comment(lib, "libomt.lib") for MSVC, which makes any translation
+  # unit that includes it auto-link the import library. Satellite resolves libomt at run time
+  # and must not link it at all, so the request is dropped here rather than by editing a
+  # vendored header we otherwise keep verbatim.
+  target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "/NODEFAULTLIB:libomt.lib")
+endif()
+
 # lib/ndi and lib/omt hold vendored interface headers for the two runtimes. They describe each
 # ABI, but nothing is linked against them - both libraries are loaded at run time.
 target_include_directories(
@@ -132,12 +140,12 @@ if(_omt_found_count EQUAL _omt_libs_count)
   if(OS_WINDOWS)
     install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit")
   elseif(OS_MACOS)
-    # Carried into Contents/MacOS as part of the bundle itself, rather than installed to a
-    # path we would have to spell out. The bundle is what gets installed and packaged, so the
-    # libraries travel with it, and they end up beside the plugin binary - which is what
-    # @loader_path in libomt resolves to when it goes looking for libvmx.
+    # Contents/Frameworks, not Contents/MacOS. codesign treats a bundle's Frameworks
+    # directory as nested code and signs what it finds there; loose Mach-O binaries beside
+    # the main executable are treated as resources instead, and signing the bundle fails.
+    # They stay together either way, so @loader_path in libomt still finds libvmx.
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${_omt_found})
-    set_source_files_properties(${_omt_found} PROPERTIES MACOSX_PACKAGE_LOCATION MacOS)
+    set_source_files_properties(${_omt_found} PROPERTIES MACOSX_PACKAGE_LOCATION Frameworks)
   else()
     install(FILES ${_omt_found} DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins)
   endif()

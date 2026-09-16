@@ -9,7 +9,7 @@ also package it, producing the installers and archives the OBS plugin template d
 |---|---|---|
 | Windows | `satellite-<version>-windows-x64.zip` and an NSIS installer | `satellite.dll`, `libomt.dll`, `libvmx.dll`, `data/` |
 | Linux | `.deb` and a tarball | `satellite.so`, `libomt.so`, `libvmx.so` under `obs-plugins`, `data/` under `share/obs` |
-| macOS | `satellite-<version>-macos-universal.pkg` | `satellite.plugin`, with both OMT libraries inside `Contents/MacOS` |
+| macOS | `satellite-<version>-macos-universal.pkg` | `satellite.plugin`, with both OMT libraries inside `Contents/Frameworks` |
 
 The OMT libraries are built from source by `build-aux/build-omt` before the plugin is
 configured, and CMake installs them beside the plugin binary. If that step is skipped the
@@ -82,6 +82,15 @@ These are all real, and each cost a CI round trip to find:
   30.x, so a plugin that compiles locally can fail CI on APIs deprecated in between — with
   `-Werror`, a deprecation *is* a build failure. `src/obs/obs-compat.hpp` wraps the calls
   that differ so both versions build.
+- **Nested macOS libraries go in `Contents/Frameworks`.** codesign treats that directory as
+  nested code and signs it; loose Mach-O binaries next to the main executable in
+  `Contents/MacOS` are treated as resources instead, and sealing the bundle fails. They are
+  also ad-hoc signed by `build-aux/build-omt`, because `install_name_tool` invalidates any
+  signature they arrive with.
+- **`libomt.h` auto-links itself on MSVC.** It carries
+  `#pragma comment(lib, "libomt.lib")`, so any translation unit including it asks the linker
+  for an import library Satellite deliberately does not use. `CMakeLists.txt` passes
+  `/NODEFAULTLIB:libomt.lib` rather than editing the vendored header.
 - **`plugin-support.h` must not declare `blogva`.** libobs declares it with `EXPORT`, which
   is `__declspec(dllimport)` on MSVC, so a bare declaration in a header makes every C++ file
   that also includes the obs headers fail with "redefinition; different linkage". The

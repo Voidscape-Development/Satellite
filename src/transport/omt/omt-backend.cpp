@@ -51,10 +51,17 @@ std::vector<std::string> omt_runtime_candidates()
 	const char separator = '/';
 #endif
 
-	// A copy shipped next to the plugin binary takes precedence, so a packaged Satellite
-	// uses the build it was tested against rather than whatever else is on the system.
-	if (!plugin_dir.empty())
+	// A copy shipped with the plugin takes precedence, so a packaged Satellite uses the build
+	// it was tested against rather than whatever else is on the system.
+	if (!plugin_dir.empty()) {
+#ifdef __APPLE__
+		// Inside the plugin bundle this is Contents/MacOS, and the libraries live one
+		// level across in Contents/Frameworks, which is where codesign expects nested
+		// code to be.
+		candidates.push_back(plugin_dir + "/../Frameworks/" + kLibraryName);
+#endif
 		candidates.push_back(plugin_dir + separator + kLibraryName);
+	}
 
 	// Then a user-built or system-wide install.
 	candidates.push_back(kLibraryName);
