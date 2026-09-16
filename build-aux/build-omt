@@ -23,7 +23,12 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root_dir=$(dirname "$script_dir")
 
 output_dir=${1:-"$root_dir/deps/omt"}
-work_dir=${OMT_BUILD_DIR:-"$root_dir/.deps/omt-build"}
+
+# Deliberately outside the source tree. The macOS build runs
+#   xattr -r -d com.apple.quarantine .deps
+# with COMMAND_ERROR_IS_FATAL, and git pack files are read-only, so a clone anywhere under
+# .deps fails that sweep with "Permission denied" and takes the whole configure down with it.
+work_dir=${OMT_BUILD_DIR:-"${TMPDIR:-/tmp}/satellite-omt-build"}
 
 # Pinned in buildspec.json so an update is a reviewable diff rather than whatever upstream
 # happens to be that day. Keep these two in step.

@@ -90,11 +90,22 @@ Neither runtime can be installed in CI, so the test suite builds fakes for both 
 same vendored headers and drives the real loaders against them — including a slow-sink mode
 that exercises what the send queue does under backpressure. See [`tests/`](tests/README.md).
 
+## Installing a release
+
+Releases are **unsigned** — there are no code signing certificates for this project — so the
+first launch needs a nudge:
+
+- **macOS**: Gatekeeper blocks the package. *System Settings → Privacy & Security → Open
+  Anyway*, or `xattr -dr com.apple.quarantine` on the download.
+- **Windows**: SmartScreen shows "Windows protected your PC". *More info → Run anyway*.
+- **Linux**: the `.deb` is unsigned, which is normal for packages outside a distro repo.
+
 ## Documentation
 
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the design specification: the decisions
-taken and why, how the two protocol APIs map onto one abstraction, the threading model, and
-the roadmap.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the design specification: decisions taken
+  and why, how the two protocol APIs map onto one abstraction, the threading model, roadmap.
+- [`docs/RELEASING.md`](docs/RELEASING.md) — what CI produces, how to cut a release, and the
+  build-system traps that have already caught us once each.
 
 ## Licence
 

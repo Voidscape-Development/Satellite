@@ -1,10 +1,12 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.6** — feature complete against the original brief (M1–M4). NDI and OMT
-> both work in both directions, the OMT libraries build from source, and the Satellite window
-> carries the metrics, advanced settings and DistroAV import. This document is the contract the
-> implementation is built against; change it in the same PR that changes the behaviour it
-> describes.
+> Status: **draft v0.7** — feature complete against the original brief and building on all
+> three platforms (M1–M5). Both protocols work in both directions, the OMT libraries build
+> from source and ship with the plugin, and the Satellite window carries the metrics,
+> advanced settings and DistroAV import. Releases are unsigned; see `docs/RELEASING.md`.
+>
+> This document is the contract the implementation is built against; change it in the same
+> PR that changes the behaviour it describes.
 
 ## 1. What Satellite is
 
@@ -455,7 +457,7 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 | **M2 — NDI send** *(landed)* | NDI sender, bounded send queue with a drop policy, Program and Preview outputs, Sender filter over a dedicated view, bidirectional tally, output controls in the dock |
 | **M3 — OMT parity** *(landed)* | Vendored `libomt.h`, runtime loader binding the flat C exports, OMT receiver and sender with full frame conversion, discovery, tally and exact statistics, fake-libomt test harness, the libraries built from pinned sources and packaged, and the Avahi guard (§11.2) |
 | **M4 — polish** *(landed)* | DistroAV import behind a confirmation dialog, full metrics in the dock with per-row detail, live advanced settings for both protocols, and a runtime re-check that avoids an OBS restart after installing NDI |
-| **M5 — release** | Three-platform CI packaging, codesigning/notarization, docs |
+| **M5 — release** *(landed)* | Three-platform CI green, OMT libraries built and packaged on all three, release process documented. **Unsigned** — no certificates are available, so macOS builds are ad-hoc signed and Windows builds are unsigned; see `docs/RELEASING.md`. |
 
 ## 14. Open questions
 

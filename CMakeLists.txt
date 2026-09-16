@@ -131,9 +131,12 @@ if(_omt_found_count EQUAL _omt_libs_count)
   if(OS_WINDOWS)
     install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}/bin/64bit")
   elseif(OS_MACOS)
-    # Inside the bundle next to the plugin binary, which is what @loader_path resolves to.
-    set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES XCODE_EMBED_FRAMEWORKS "${_omt_found}")
-    install(FILES ${_omt_found} DESTINATION "$<TARGET_BUNDLE_CONTENT_DIR_NAME:${CMAKE_PROJECT_NAME}>/MacOS")
+    # Carried into Contents/MacOS as part of the bundle itself, rather than installed to a
+    # path we would have to spell out. The bundle is what gets installed and packaged, so the
+    # libraries travel with it, and they end up beside the plugin binary - which is what
+    # @loader_path in libomt resolves to when it goes looking for libvmx.
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${_omt_found})
+    set_source_files_properties(${_omt_found} PROPERTIES MACOSX_PACKAGE_LOCATION MacOS)
   else()
     install(FILES ${_omt_found} DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins)
   endif()

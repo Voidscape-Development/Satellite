@@ -18,6 +18,12 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <plugin-support.h>
 
+/* Declared here rather than in plugin-support.h on purpose. libobs declares blogva with
+ * EXPORT, which is __declspec(dllimport) on MSVC, so a header declaring it bare makes every
+ * C++ translation unit that also includes the obs headers fail with
+ * "redefinition; different linkage". This file never includes them, so it is safe here. */
+extern void blogva(int log_level, const char *format, va_list args);
+
 const char *PLUGIN_NAME = "@CMAKE_PROJECT_NAME@";
 const char *PLUGIN_VERSION = "@CMAKE_PROJECT_VERSION@";
 

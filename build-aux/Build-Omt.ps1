@@ -27,7 +27,10 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $RootDir 'deps/omt'
 }
 
-$WorkDir = if ($env:OMT_BUILD_DIR) { $env:OMT_BUILD_DIR } else { Join-Path $RootDir '.deps/omt-build' }
+# Deliberately outside the source tree, matching build-omt: the macOS build sweeps .deps with
+# xattr and read-only git pack files fail it, and there is no reason for the platforms to
+# differ on where scratch clones live.
+$WorkDir = if ($env:OMT_BUILD_DIR) { $env:OMT_BUILD_DIR } else { Join-Path $env:TEMP 'satellite-omt-build' }
 
 # Pinned in buildspec.json so an update is a reviewable diff. Keep in step with build-omt.
 $Spec = Get-Content (Join-Path $RootDir 'buildspec.json') -Raw | ConvertFrom-Json
