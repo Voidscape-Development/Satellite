@@ -18,11 +18,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "ui/satellite-dock.hpp"
 
+#include <algorithm>
+
 #include "config/config.hpp"
 #include "discovery/discovery-service.hpp"
 #include "metrics/feed-registry.hpp"
 #include "obs/satellite-output.hpp"
 #include "transport/transport.hpp"
+#include "ui/import-dialog.hpp"
 #include "ui/sparkline.hpp"
 
 #include <QCheckBox>
@@ -33,6 +36,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -64,6 +70,7 @@ enum FeedColumn {
 	ColumnAudio,
 	ColumnBitrate,
 	ColumnDropped,
+	ColumnConnections,
 	ColumnTally,
 	ColumnHistory,
 	ColumnCount,
@@ -161,6 +168,7 @@ SatelliteDock::SatelliteDock(QWidget *parent) : QWidget(parent)
 
 	buildRuntimeStatus(layout);
 	buildOutputControls(layout);
+	buildAdvancedSettings(layout);
 	buildFeedTable(layout);
 
 	timer_ = new QTimer(this);
@@ -191,7 +199,53 @@ void SatelliteDock::buildRuntimeStatus(QVBoxLayout *layout)
 	group_layout->addWidget(ndiStatus_);
 	group_layout->addWidget(omtStatus_);
 
+	auto *buttons = new QHBoxLayout();
+	buttons->setContentsMargins(0, 2, 0, 0);
+
+	// Installing the NDI runtime usually means quitting OBS and coming back. It does not
+	// have to: nothing is loaded yet when a runtime is missing, so retrying is safe, and
+	// this turns a restart into a click.
+	recheck_ = new QPushButton(obs_module_text("Satellite.Dock.Recheck"), group);
+	recheck_->setToolTip(obs_module_text("Satellite.Dock.Recheck.Hint"));
+	connect(recheck_, &QPushButton::clicked, this, &SatelliteDock::recheckRuntimes);
+
+	auto *import = new QPushButton(obs_module_text("Satellite.Dock.Import"), group);
+	import->setToolTip(obs_module_text("Satellite.Dock.Import.Hint"));
+	connect(import, &QPushButton::clicked, this, &SatelliteDock::importFromDistroAV);
+
+	buttons->addWidget(recheck_);
+	buttons->addWidget(import);
+	buttons->addStretch(1);
+	group_layout->addLayout(buttons);
+
 	layout->addWidget(group);
+}
+
+void SatelliteDock::recheckRuntimes()
+{
+	// Only ever retried for a backend that is not available. A loaded backend is in use by
+	// the discovery thread and by any live source, so reloading it underneath them would be
+	// a crash rather than a refresh.
+	int loaded = 0;
+	for (IBackend *backend : all_backends()) {
+		if (backend->available())
+			continue;
+		if (backend->load())
+			++loaded;
+	}
+
+	refreshRuntimeStatus();
+
+	if (loaded > 0)
+		obs_log(LOG_INFO, "%d protocol(s) became available after a re-check", loaded);
+}
+
+void SatelliteDock::importFromDistroAV()
+{
+	if (!run_distroav_import(this)) {
+		QMessageBox::information(this, obs_module_text("Satellite.Import.Title"),
+					 obs_module_text("Satellite.Import.NothingFound"));
+	}
 }
 
 void SatelliteDock::buildOutputControls(QVBoxLayout *layout)
@@ -236,6 +290,71 @@ void SatelliteDock::applyOutputSettings()
 	update_frontend_outputs();
 }
 
+void SatelliteDock::buildAdvancedSettings(QVBoxLayout *layout)
+{
+	auto *group = new QGroupBox(obs_module_text("Satellite.Dock.Advanced"), this);
+	group->setCheckable(true);
+	group->setChecked(false);
+
+	auto *form = new QFormLayout(group);
+	form->setContentsMargins(8, 6, 8, 6);
+
+	const Config &config = Config::instance();
+
+	ndiGroups_ = new QLineEdit(QString::fromStdString(config.ndi_groups), group);
+	ndiGroups_->setPlaceholderText(obs_module_text("Satellite.Advanced.NdiGroups.Placeholder"));
+	ndiGroups_->setToolTip(obs_module_text("Satellite.Advanced.NdiGroups.Hint"));
+
+	omtDiscoveryServer_ = new QLineEdit(QString::fromStdString(config.omt_discovery_server), group);
+	omtDiscoveryServer_->setPlaceholderText(obs_module_text("Satellite.Advanced.OmtServer.Placeholder"));
+	omtDiscoveryServer_->setToolTip(obs_module_text("Satellite.Advanced.OmtServer.Hint"));
+
+	omtPortStart_ = new QSpinBox(group);
+	omtPortStart_->setRange(1024, 65535);
+	omtPortStart_->setValue(config.omt_port_start);
+
+	omtPortEnd_ = new QSpinBox(group);
+	omtPortEnd_->setRange(1024, 65535);
+	omtPortEnd_->setValue(config.omt_port_end);
+
+	auto *ports = new QHBoxLayout();
+	ports->setContentsMargins(0, 0, 0, 0);
+	ports->addWidget(omtPortStart_);
+	ports->addWidget(new QLabel(QStringLiteral("–"), group));
+	ports->addWidget(omtPortEnd_);
+	ports->addStretch(1);
+
+	form->addRow(obs_module_text("Satellite.Advanced.NdiGroups"), ndiGroups_);
+	form->addRow(obs_module_text("Satellite.Advanced.OmtServer"), omtDiscoveryServer_);
+	form->addRow(obs_module_text("Satellite.Advanced.OmtPorts"), ports);
+
+	// editingFinished rather than textChanged: applying on every keystroke would rebuild the
+	// NDI finder once per character.
+	connect(ndiGroups_, &QLineEdit::editingFinished, this, &SatelliteDock::applyAdvancedSettings);
+	connect(omtDiscoveryServer_, &QLineEdit::editingFinished, this, &SatelliteDock::applyAdvancedSettings);
+	connect(omtPortStart_, &QSpinBox::editingFinished, this, &SatelliteDock::applyAdvancedSettings);
+	connect(omtPortEnd_, &QSpinBox::editingFinished, this, &SatelliteDock::applyAdvancedSettings);
+
+	layout->addWidget(group);
+}
+
+void SatelliteDock::applyAdvancedSettings()
+{
+	Config &config = Config::instance();
+
+	config.ndi_groups = ndiGroups_->text().toStdString();
+	config.omt_discovery_server = omtDiscoveryServer_->text().toStdString();
+	config.omt_port_start = omtPortStart_->value();
+	config.omt_port_end = omtPortEnd_->value();
+
+	config.save();
+
+	// Backends decide for themselves what can be applied live and what has to wait for a
+	// safe moment on another thread.
+	for (IBackend *backend : all_backends())
+		backend->settings_changed();
+}
+
 void SatelliteDock::buildFeedTable(QVBoxLayout *layout)
 {
 	feeds_ = new QTreeWidget(this);
@@ -250,7 +369,8 @@ void SatelliteDock::buildFeedTable(QVBoxLayout *layout)
 		<< obs_module_text("Satellite.Column.Direction") << obs_module_text("Satellite.Column.State")
 		<< obs_module_text("Satellite.Column.Video") << obs_module_text("Satellite.Column.Audio")
 		<< obs_module_text("Satellite.Column.Bitrate") << obs_module_text("Satellite.Column.Dropped")
-		<< obs_module_text("Satellite.Column.Tally") << obs_module_text("Satellite.Column.History");
+		<< obs_module_text("Satellite.Column.Connections") << obs_module_text("Satellite.Column.Tally")
+		<< obs_module_text("Satellite.Column.History");
 	feeds_->setHeaderLabels(headers);
 	feeds_->header()->setSectionResizeMode(ColumnName, QHeaderView::Stretch);
 
@@ -268,6 +388,8 @@ void SatelliteDock::refresh()
 
 void SatelliteDock::refreshRuntimeStatus()
 {
+	bool any_unavailable = false;
+
 	for (IBackend *backend : all_backends()) {
 		QLabel *label = backend->protocol() == Protocol::NDI ? ndiStatus_ : omtStatus_;
 		if (!label)
@@ -294,6 +416,9 @@ void SatelliteDock::refreshRuntimeStatus()
 
 		label->setText(text);
 	}
+
+	if (recheck_)
+		recheck_->setEnabled(any_unavailable);
 }
 
 void SatelliteDock::refreshFeedTable()
@@ -329,7 +454,32 @@ void SatelliteDock::refreshFeedTable()
 		item->setText(ColumnBitrate, bitrate);
 
 		item->setText(ColumnDropped, QString::number(feed.stats.frames_dropped));
+		item->setText(ColumnConnections,
+			      feed.stats.connections >= 0 ? QString::number(feed.stats.connections) : QString());
 		item->setText(ColumnTally, tally_text(feed.tally));
+
+		// Everything else worth knowing goes in the row's tooltip. A dock is narrow, and a
+		// column each for fps, codec time and peak bitrate would make the table unreadable
+		// for numbers most people look at once.
+		QStringList detail;
+		detail << tr("Protocol: %1").arg(QString::fromUtf8(protocol_display_name(feed.protocol)));
+		if (feed.stats.fps > 0.0)
+			detail << tr("Rate: %1 fps").arg(feed.stats.fps, 0, 'f', 1);
+		detail << tr("Frames: %1 total, %2 dropped").arg(feed.stats.frames).arg(feed.stats.frames_dropped);
+		if (feed.stats.codec_ms >= 0.0)
+			detail << tr("Codec: %1 ms/frame").arg(feed.stats.codec_ms, 0, 'f', 1);
+		detail << (feed.stats.bitrate_estimated ? tr("Bitrate is measured locally, the protocol reports no "
+							     "byte counters")
+							: tr("Bitrate is reported exactly by the protocol"));
+
+		if (!feed.bitrate_history.empty()) {
+			const double peak = *std::max_element(feed.bitrate_history.begin(), feed.bitrate_history.end());
+			detail << tr("Peak: %1 Mb/s").arg(peak, 0, 'f', 1);
+		}
+
+		const QString tooltip = detail.join(QStringLiteral("\n"));
+		for (int column = 0; column < ColumnCount; ++column)
+			item->setToolTip(column, tooltip);
 
 		if (auto *sparkline = qobject_cast<Sparkline *>(feeds_->itemWidget(item, ColumnHistory))) {
 			QVector<double> values;

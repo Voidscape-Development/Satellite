@@ -78,6 +78,16 @@ it. Nothing about either load path is mocked:
 - `omt_shutdown` runs before the library handle is released, so libomt's own background
   threads do not outlive the code they are in
 
+### `import-test` — DistroAV compatibility
+
+- `ndi_bw_mode` maps onto Satellite's `Quality` correctly for all of DistroAV's `PROP_BW_*`
+  values, and anything unrecognised falls back to **full** quality rather than silently
+  degrading an imported feed
+- Every mapped quality survives the round trip through the string id that settings store
+
+These are another project's internal constants, read out of its `ndi-source.cpp`. Nothing
+else would notice them changing, which is the point of pinning them here.
+
 ## What it does not cover
 
 These are fakes, so they prove Satellite drives each ABI correctly — not that the real

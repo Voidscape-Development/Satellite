@@ -5,11 +5,12 @@ machines on a local network, over **either NDI or OMT ([Open Media
 Transport](https://github.com/openmediatransport))**, behind one shared set of OBS
 source/filter/output types and one management window.
 
-> **Status: early development.** **Both protocols now work in both directions** — receive a
-> feed into OBS, or publish your Program, Preview, or any single source onto the network,
-> with tally, over NDI or OMT.
+> **Status: feature complete, not yet battle-tested.** Both protocols work in both
+> directions — receive a feed into OBS, or publish your Program, Preview, or any single
+> source onto the network, with tally, over NDI or OMT.
 >
-> See [the roadmap](docs/ARCHITECTURE.md#13-roadmap) for what is still to come.
+> It has not yet been run inside a real OBS against real hardware. If you try it, please
+> report what breaks.
 
 ## Why
 
@@ -33,11 +34,11 @@ plugin.
 - **The Satellite window** — an OBS dock listing every active feed in either direction with
   its state, format, bitrate, dropped frames and a rolling history sparkline
 - **Runtime status** — whether each protocol's library is present, with an install link for
-  NDI
-
-**Planned**
-
-- **DistroAV import** — a one-time, non-destructive offer to convert an existing setup
+  NDI and a re-check button so installing it does not need an OBS restart
+- **DistroAV import** — converts an existing DistroAV setup, showing exactly what it will do
+  first and leaving your originals alone unless you ask otherwise
+- **Advanced settings** — NDI groups, and the OMT discovery server and port range, applied
+  without restarting OBS
 
 ## Installing the runtimes
 
@@ -99,8 +100,8 @@ the roadmap.
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).
 
-- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed. Its header is vendored here;
-  the libraries are not yet shipped.
+- **OMT** (`libomt`, `libomtnet`, `libvmx`) is MIT-licensed. Its header is vendored here and
+  the libraries are built from pinned sources and shipped with the plugin.
 - **NDI** is proprietary. Satellite links to it only at run time and ships none of it. NDI®
   is a registered trademark of Vizrt NDI AB; Satellite is not affiliated with or endorsed by
   Vizrt.

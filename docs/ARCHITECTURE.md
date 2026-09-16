@@ -1,7 +1,8 @@
 # Satellite — Architecture &amp; Design Specification
 
-> Status: **draft v0.5** — design agreed, scaffolding landed, NDI and OMT both implemented
-> in both directions, and the OMT libraries built from source and packaged (M1–M3). This document is the contract the
+> Status: **draft v0.6** — feature complete against the original brief (M1–M4). NDI and OMT
+> both work in both directions, the OMT libraries build from source, and the Satellite window
+> carries the metrics, advanced settings and DistroAV import. This document is the contract the
 > implementation is built against; change it in the same PR that changes the behaviour it
 > describes.
 
@@ -289,7 +290,12 @@ installed" affordance.
 | Dropped | OMT: `FramesDropped`. NDI: `NDIlib_recv_get_performance` dropped counters |
 | Connections | senders only |
 | Tally | program / preview indicators |
+| Conn | connections, for senders |
 | History | sparkline of bitrate over the last ~60 samples |
+
+Frame rate, codec time, peak bitrate and whether the bitrate is exact or measured go in each
+row's tooltip rather than in columns. A dock is narrow, and a column each for numbers people
+look at once would make the table unreadable.
 
 **Output controls** — Program and Preview sender configuration, per §7.3.
 
@@ -308,13 +314,50 @@ with the scene collection.
 
 ## 10. DistroAV migration
 
-Per decision #7, on first run Satellite scans the loaded scene collection for DistroAV
-sources and filters and its saved configuration, and if it finds any, offers a dialog
-listing exactly what would be converted. Nothing is touched without confirmation, and
-DistroAV's own items are left in place unless the user approves replacing them.
+Per decision #7, on first run — once the scene collection has loaded, which is why it hangs
+off `OBS_FRONTEND_EVENT_FINISHED_LOADING` rather than module load — Satellite scans for
+DistroAV items and, if it finds any, offers a dialog listing exactly what would be converted.
+Every row is individually checkable. It is also available any time from the Satellite window,
+so declining the offer is not a one-way door.
 
-The mapping is mechanical — DistroAV is NDI-only, so every import lands on
-`Protocol::NDI` with the same source name, bandwidth and audio settings.
+What gets scanned, with the identifiers read out of DistroAV's own source rather than
+guessed:
+
+| DistroAV | Becomes |
+|---|---|
+| `ndi_source` input | Satellite Source on `Protocol::NDI`, carrying `ndi_source_name`, `ndi_audio`, and `ndi_bw_mode` mapped onto `Quality` |
+| `ndi_filter` | Satellite Sender, carrying `ndi_filter_ndiname` |
+| `ndi_audiofilter` | Satellite Sender, **flagged**: Satellite has one sender filter and it carries video too, so this is not an exact conversion |
+| `MainOutputName` / `PreviewOutputName` in OBS's config under `NDIPlugin` | The Program and Preview sender settings |
+
+`ndi_bw_mode` is DistroAV's `PROP_BW_*`: 0 highest, 1 lowest, 2 audio-only, -1 undefined.
+Anything unrecognised maps to full quality, because guessing lower would silently degrade a
+feed with no indication why. `tests/import-test` pins all of that, since those numbers are
+another project's internals and nothing would otherwise notice them changing.
+
+**Non-destructive by default.** Converted sources are added alongside the DistroAV ones,
+mirrored into every scene that used them with the same transform and visibility, and the
+originals are removed only if the user ticks the box. Imported output settings are written
+but **not enabled** — converting settings is one thing, putting a feed on the network
+unasked is another.
+
+## 10.1 Live settings
+
+Advanced settings are edited in the Satellite window and applied without restarting OBS, but
+the two protocols can absorb a change at different moments, so `IBackend::settings_changed()`
+lets each decide:
+
+- **OMT** applies immediately. `omt_settings_*` only affect instances created afterwards and
+  libomt guards them internally.
+- **NDI** cannot. Groups are baked into the finder at creation, so a change means a new
+  finder — and the discovery thread is using the old one. The backend therefore only marks it
+  stale, and the discovery thread rebuilds it at the top of its next cycle, where it is the
+  only thread involved.
+
+The same reasoning governs the runtime re-check button: it retries `load()` only for
+backends that are **not** available. A loaded backend is in use by the discovery thread and
+by every live source, so reloading it underneath them would be a crash rather than a refresh.
+Restricted that way, installing the NDI runtime becomes a click instead of an OBS restart.
 
 ## 11. Build and packaging
 
@@ -411,7 +454,7 @@ Satellite is **GPL-2.0-or-later**, matching the `obs-plugintemplate` default and
 | **M1 — NDI receive** *(landed)* | Vendored NDI 6 headers, runtime loader, real discovery, receiver with full frame conversion, Satellite Source pushing video and audio into OBS, dock showing live receive feeds, fake-runtime test harness |
 | **M2 — NDI send** *(landed)* | NDI sender, bounded send queue with a drop policy, Program and Preview outputs, Sender filter over a dedicated view, bidirectional tally, output controls in the dock |
 | **M3 — OMT parity** *(landed)* | Vendored `libomt.h`, runtime loader binding the flat C exports, OMT receiver and sender with full frame conversion, discovery, tally and exact statistics, fake-libomt test harness, the libraries built from pinned sources and packaged, and the Avahi guard (§11.2) |
-| **M4 — polish** | DistroAV import, sparklines and full metrics, advanced per-protocol settings, install-helper flows |
+| **M4 — polish** *(landed)* | DistroAV import behind a confirmation dialog, full metrics in the dock with per-row detail, live advanced settings for both protocols, and a runtime re-check that avoids an OBS restart after installing NDI |
 | **M5 — release** | Three-platform CI packaging, codesigning/notarization, docs |
 
 ## 14. Open questions
@@ -425,7 +468,8 @@ Not blocking M0/M1; worth settling before the milestone that needs them.
 2. ~~**Sender naming**~~ — settled, and it turned out not to be a choice: NDI itself
    presents a sender as `MACHINE (name)`. The machine prefix is the runtime's doing, so
    Satellite passes the bare name and gets DistroAV's convention for free.
-3. **Per-feed CPU** — deliberately excluded from decision #5. OMT hands us `CodecTime` for
-   free, which is most of the value. Add real per-thread CPU later, or leave it? (M4)
+3. **Per-feed CPU** — still open, and less pressing than it was: OMT's `CodecTime` is
+   surfaced in the row tooltip, which is most of the value for the case that matters. Real
+   per-thread CPU remains platform-specific work nobody has asked for yet.
 4. **Failover** — should a source be able to hold both an NDI and an OMT address and fall
    back? Attractive, and outside v1 scope. (post-v1)

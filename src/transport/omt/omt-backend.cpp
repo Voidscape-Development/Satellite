@@ -534,6 +534,14 @@ public:
 	/// Empty: there is nothing for a user to go and install from a vendor page.
 	std::string install_url() const override { return {}; }
 
+	void settings_changed() override
+	{
+		// omt_settings_* only affect instances created afterwards, and libomt guards them
+		// internally, so unlike NDI these can be applied straight away.
+		if (available_)
+			apply_settings();
+	}
+
 	bool wait_for_sources(int timeout_ms) override
 	{
 		// libomt runs its own discovery thread and omt_discovery_getaddresses is a

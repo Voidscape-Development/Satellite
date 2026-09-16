@@ -23,6 +23,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "obs/satellite-output.hpp"
 #include "obs/satellite-source.hpp"
 #include "transport/transport.hpp"
+#include "ui/import-dialog.hpp"
 #include "ui/satellite-dock.hpp"
 
 #include <obs-frontend-api.h>
@@ -42,6 +43,11 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 		// obs_module_load().
 		satellite::register_satellite_dock();
 		satellite::update_frontend_outputs();
+
+		// Offered once, and only when there is actually a DistroAV setup to convert. The
+		// scene collection has to be loaded for the scan to see anything, which is why it
+		// happens here rather than in obs_module_load.
+		satellite::maybe_offer_distroav_import(nullptr);
 		break;
 
 	case OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED:

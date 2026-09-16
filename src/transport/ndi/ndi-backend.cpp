@@ -22,6 +22,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "transport/library-loader.hpp"
 #include "transport/rate-meter.hpp"
 
+#include <atomic>
+
 #include <Processing.NDI.Lib.h>
 
 #include <obs-module.h>
@@ -537,9 +539,29 @@ public:
 	std::string runtime_version() const override { return runtime_version_; }
 	std::string install_url() const override { return ndi_install_url(); }
 
+	void settings_changed() override
+	{
+		// Groups are baked into the finder at creation, so changing them means a new
+		// finder. Rebuilding it here would race the discovery thread, which is the only
+		// thread that touches it, so it is flagged and rebuilt there instead.
+		finder_stale_.store(true, std::memory_order_release);
+	}
+
 	bool wait_for_sources(int timeout_ms) override
 	{
-		if (!available_ || !finder_)
+		if (!available_)
+			return false;
+
+		if (finder_stale_.exchange(false, std::memory_order_acq_rel)) {
+			if (finder_) {
+				ndi_->find_destroy(finder_);
+				finder_ = nullptr;
+			}
+			if (!create_finder())
+				obs_log(LOG_WARNING, "could not rebuild the NDI finder after a settings change");
+		}
+
+		if (!finder_)
 			return false;
 
 		// Blocks inside the SDK and returns as soon as the source list changes. The finder
@@ -650,6 +672,7 @@ private:
 	NDIlib_find_instance_t finder_ = nullptr;
 
 	bool available_ = false;
+	std::atomic<bool> finder_stale_{false};
 	std::string runtime_version_;
 	std::string unavailable_reason_ = "not loaded";
 };

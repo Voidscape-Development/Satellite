@@ -99,3 +99,22 @@ target_link_libraries(omt-test PRIVATE OBS::libobs ${CMAKE_DL_LIBS})
 add_dependencies(omt-test fake-omt)
 
 add_test(NAME omt COMMAND omt-test)
+
+add_executable(
+  import-test
+  import-test.cpp
+  "${CMAKE_SOURCE_DIR}/src/obs/distroav-import.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/library-loader.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/ndi/ndi-backend.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/omt/omt-api.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/omt/omt-backend.cpp"
+  "${CMAKE_SOURCE_DIR}/src/transport/transport.cpp"
+)
+target_include_directories(
+  import-test
+  PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/lib/ndi" "${CMAKE_SOURCE_DIR}/lib/omt"
+)
+target_compile_features(import-test PRIVATE cxx_std_17)
+target_link_libraries(import-test PRIVATE OBS::libobs OBS::obs-frontend-api ${CMAKE_DL_LIBS})
+
+add_test(NAME import COMMAND import-test)

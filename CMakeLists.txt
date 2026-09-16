@@ -67,6 +67,8 @@ target_sources(
     src/obs/satellite-filter.hpp
     src/obs/satellite-output.cpp
     src/obs/satellite-output.hpp
+    src/obs/distroav-import.cpp
+    src/obs/distroav-import.hpp
     src/obs/satellite-source.cpp
     src/obs/satellite-source.hpp
     src/obs/sender-session.cpp
@@ -82,6 +84,8 @@ target_sources(
     src/transport/rate-meter.hpp
     src/transport/transport.cpp
     src/transport/transport.hpp
+    src/ui/import-dialog.cpp
+    src/ui/import-dialog.hpp
     src/ui/satellite-dock.cpp
     src/ui/satellite-dock.hpp
     src/ui/sparkline.cpp

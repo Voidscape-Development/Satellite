@@ -24,6 +24,8 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
+class QSpinBox;
 class QTimer;
 class QTreeWidget;
 class QVBoxLayout;
@@ -69,10 +71,14 @@ public:
 private slots:
 	void refresh();
 	void applyOutputSettings();
+	void applyAdvancedSettings();
+	void recheckRuntimes();
+	void importFromDistroAV();
 
 private:
 	void buildRuntimeStatus(QVBoxLayout *layout);
 	void buildOutputControls(QVBoxLayout *layout);
+	void buildAdvancedSettings(QVBoxLayout *layout);
 	void buildFeedTable(QVBoxLayout *layout);
 	void refreshRuntimeStatus();
 	void refreshFeedTable();
@@ -80,11 +86,17 @@ private:
 	QLabel *ndiStatus_ = nullptr;
 	QLabel *omtStatus_ = nullptr;
 	QLabel *summary_ = nullptr;
+	QPushButton *recheck_ = nullptr;
 	QTreeWidget *feeds_ = nullptr;
 	QTimer *timer_ = nullptr;
 
 	OutputControls *program_ = nullptr;
 	OutputControls *preview_ = nullptr;
+
+	QLineEdit *ndiGroups_ = nullptr;
+	QLineEdit *omtDiscoveryServer_ = nullptr;
+	QSpinBox *omtPortStart_ = nullptr;
+	QSpinBox *omtPortEnd_ = nullptr;
 };
 
 /// Creates the dock, registers it with the frontend, and adds the Tools menu entry that

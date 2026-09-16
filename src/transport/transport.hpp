@@ -238,6 +238,14 @@ public:
 	/// Where to get the runtime. Empty when Satellite bundles it (OMT).
 	virtual std::string install_url() const = 0;
 
+	/// Re-read the plugin configuration and apply whatever can change while running.
+	///
+	/// Called from the UI thread when the user edits the advanced settings. Backends must
+	/// not do anything here that the discovery or media threads could be using - the NDI
+	/// backend, for instance, only marks its finder for rebuilding and lets the discovery
+	/// thread do the work, because that thread is the finder's only user.
+	virtual void settings_changed() = 0;
+
 	/// Block until the source list may have changed, or timeout_ms elapses.
 	///
 	/// NDI blocks inside the SDK (NDIlib_find_wait_for_sources); OMT has no blocking
