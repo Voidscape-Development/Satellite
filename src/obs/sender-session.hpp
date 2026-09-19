@@ -82,6 +82,10 @@ private:
 	mutable std::mutex mutex_;
 	std::condition_variable wake_;
 
+	/// Set once a frame has been dropped for an unsendable pixel format, so the warning
+	/// does not repeat at frame rate.
+	std::atomic<bool> warned_format_{false};
+
 	std::deque<Slot> video_queue_;
 	std::deque<Slot> audio_queue_;
 	std::vector<Slot> video_pool_;

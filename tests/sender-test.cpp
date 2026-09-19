@@ -270,6 +270,33 @@ int main()
 
 	unsetenv("FAKE_NDI_SEND_DELAY_MS");
 
+	printf("== session queue, multi-plane frame ==\n");
+	video_before = log->video_frames;
+
+	// The queue copies one plane, so a frame describing planes it does not carry must stop
+	// here. Letting it through is what made the NDI runtime read past the copy: it would
+	// take the UYVY buffer's stride and height for a Y plane and go looking for chroma
+	// half a frame beyond the end of it.
+	{
+		SenderSession session;
+		check(session.start(Protocol::NDI, config), "session started for the format check");
+
+		VideoFrame planar = make_video(storage, 100000000ULL, 0x40);
+		planar.format = VIDEO_FORMAT_NV12;
+		session.push_video(planar);
+
+		VideoFrame packed = make_video(storage, 200000000ULL, 0x41);
+		session.push_video(packed);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+		check(log->video_frames - video_before == 1, "planar frame dropped, packed frame still sent");
+		check(log->last_fourcc == NDI_LIB_FOURCC('U', 'Y', 'V', 'Y'),
+		      "only the UYVY frame reached the runtime");
+
+		session.stop();
+	}
+
 	unregister_backends();
 
 	printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASSED" : "FAILURES", g_failures,
