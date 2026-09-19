@@ -57,6 +57,10 @@ struct FilterContext {
 
 	obs_view_t *view = nullptr;
 	video_t *view_video = nullptr;
+	/// What start_sending asked the view's output to convert to, which is what
+	/// on_view_video then receives. The view's own info still reports the unconverted
+	/// format, so this is the only description of the bytes that arrive.
+	video_scale_info conversion = {};
 	obs_source_t *captured_audio_source = nullptr;
 	bool connected = false;
 };
@@ -68,11 +72,17 @@ void on_view_video(void *param, video_data *frame)
 		return;
 
 	const video_output_info *info = video_output_get_info(context->view_video);
+	const video_scale_info &conversion = context->conversion;
 
+	// The conversion, not the view's own info, is what describes data[0]: OBS has already
+	// converted the frame by the time it lands here. Describing a UYVY buffer with the
+	// view's format (NV12 by default) would send the backend looking for a second plane.
 	VideoFrame video = {};
-	video.width = info->width;
-	video.height = info->height;
-	video.format = info->format;
+	video.width = conversion.width;
+	video.height = conversion.height;
+	video.format = conversion.format;
+	video.colorspace = conversion.colorspace;
+	video.range = conversion.range;
 	video.framerate_num = info->fps_num;
 	video.framerate_den = info->fps_den;
 	video.timestamp_ns = frame->timestamp;
@@ -165,14 +175,14 @@ void start_sending(FilterContext *context)
 	}
 
 	// UYVY, so the frame reaching the backend needs no pixel conversion.
-	video_scale_info conversion = {};
-	conversion.format = VIDEO_FORMAT_UYVY;
-	conversion.width = ovi.output_width;
-	conversion.height = ovi.output_height;
-	conversion.range = VIDEO_RANGE_PARTIAL;
-	conversion.colorspace = ovi.output_height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
+	context->conversion = {};
+	context->conversion.format = VIDEO_FORMAT_UYVY;
+	context->conversion.width = ovi.output_width;
+	context->conversion.height = ovi.output_height;
+	context->conversion.range = VIDEO_RANGE_PARTIAL;
+	context->conversion.colorspace = ovi.output_height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
 
-	context->connected = video_output_connect(context->view_video, &conversion, on_view_video, context);
+	context->connected = video_output_connect(context->view_video, &context->conversion, on_view_video, context);
 	if (!context->connected) {
 		obs_log(LOG_WARNING, "could not connect to the render output for '%s'", context->name.c_str());
 		stop_sending(context);

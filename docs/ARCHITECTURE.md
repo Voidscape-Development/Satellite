@@ -253,6 +253,15 @@ An `obs_output_info` plus frontend wiring, configured from the Satellite window 
 from a source: independent enable, name and quality for Program and for Preview, and the
 Preview sender starts only when Studio Mode is active.
 
+Both senders ask OBS to convert to UYVY before the frame reaches them — the filter through
+`video_output_connect`, the output through `obs_output_set_video_conversion`. The converted
+frame is what the callback receives, but the `video_t` keeps reporting its *own* format
+(NV12 for the usual mix), so the requested conversion is what each of them carries forward
+as the frame's description. Taking the format from the `video_output_info` instead hands the
+backend a plane count that does not match the bytes, and NDI reads half a frame past the end
+of the buffer. `SenderSession::push_video` copies one plane and drops anything that is not a
+single-plane format, so that mismatch can only ever cost a frame.
+
 ### 7.4 Tally
 
 Bidirectional, per decision #6. Note which side does which — it is the opposite of what the

@@ -39,6 +39,27 @@ constexpr size_t kMaxAudioQueue = 32;
 /// How often the send thread refreshes tally and the Satellite window's counters.
 constexpr uint64_t kPollIntervalNs = 200000000;
 
+/// Whether every pixel of a frame lives in data[0].
+///
+/// push_video copies one plane, so a frame in a planar or semi-planar format would reach the
+/// backend describing a second plane that was never copied - and the backend would hand the
+/// runtime a pointer to read past the end of the slot. Both senders ask OBS to convert to
+/// UYVY, so nothing else should arrive here; this is what keeps a mismatch a dropped frame
+/// and a log line rather than an access violation inside the NDI or OMT runtime.
+bool is_single_plane(video_format format)
+{
+	switch (format) {
+	case VIDEO_FORMAT_UYVY:
+	case VIDEO_FORMAT_YUY2:
+	case VIDEO_FORMAT_RGBA:
+	case VIDEO_FORMAT_BGRA:
+	case VIDEO_FORMAT_BGRX:
+		return true;
+	default:
+		return false;
+	}
+}
+
 } // namespace
 
 SenderSession::~SenderSession()
@@ -64,6 +85,7 @@ bool SenderSession::start(Protocol protocol, const SenderConfig &config)
 	name_ = config.name;
 	feed_id_ = FeedRegistry::instance().register_feed(protocol, FeedDirection::Send, config.name);
 	dropped_ = 0;
+	warned_format_.store(false, std::memory_order_relaxed);
 
 	running_.store(true, std::memory_order_release);
 	thread_ = std::thread(&SenderSession::run, this);
@@ -125,6 +147,14 @@ void SenderSession::push_video(const VideoFrame &frame)
 {
 	if (!running_.load(std::memory_order_acquire) || !frame.data[0] || frame.linesize[0] == 0)
 		return;
+
+	if (!is_single_plane(frame.format)) {
+		// Once per session: this cannot fix itself, and it arrives at frame rate.
+		if (!warned_format_.exchange(true, std::memory_order_relaxed))
+			obs_log(LOG_WARNING, "dropping '%s' video: OBS format %d is not single-plane", name_.c_str(),
+				static_cast<int>(frame.format));
+		return;
+	}
 
 	const size_t bytes = static_cast<size_t>(frame.linesize[0]) * frame.height;
 

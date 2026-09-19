@@ -43,16 +43,41 @@ constexpr const char *kSettingAudio = "send_audio";
 struct OutputContext {
 	obs_output_t *output = nullptr;
 	SenderSession session;
+	/// What output_start asked OBS to convert to, which is what the raw_video callback
+	/// then receives. Kept here because the video_t still reports its own unconverted
+	/// format and nothing else describes the bytes that actually arrive.
+	video_scale_info conversion = {};
 	bool capturing = false;
 };
 
-VideoFrame to_video_frame(const video_data *data, const video_output_info *info)
+/// Fills in the requested conversion for this output. Split out so the frame description and
+/// the conversion request cannot drift apart.
+video_scale_info conversion_for(const video_output_info *info)
+{
+	video_scale_info conversion = {};
+
+	conversion.format = VIDEO_FORMAT_UYVY;
+	conversion.width = info->width;
+	conversion.height = info->height;
+	conversion.range = VIDEO_RANGE_PARTIAL;
+	conversion.colorspace = info->height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
+
+	return conversion;
+}
+
+VideoFrame to_video_frame(const video_data *data, const video_output_info *info, const video_scale_info &conversion)
 {
 	VideoFrame frame = {};
 
-	frame.width = info->width;
-	frame.height = info->height;
-	frame.format = info->format;
+	// OBS applies the conversion before the frame reaches this callback, so the conversion
+	// - not the video output's own info - is what describes data[0]. Taking the format from
+	// info instead would label a UYVY buffer with the mix's format (NV12 by default), and
+	// the backend would then read a plane that is not there.
+	frame.width = conversion.width;
+	frame.height = conversion.height;
+	frame.format = conversion.format;
+	frame.colorspace = conversion.colorspace;
+	frame.range = conversion.range;
 	frame.framerate_num = info->fps_num;
 	frame.framerate_den = info->fps_den;
 	frame.timestamp_ns = data->timestamp;
@@ -120,17 +145,11 @@ bool output_start(void *data)
 	// Ask OBS for UYVY. Both protocols take it directly, so the frame that reaches the
 	// backend needs no pixel conversion - the same zero-conversion path as receiving.
 	video_t *video = obs_output_video(context->output);
-	if (video) {
-		const video_output_info *info = video_output_get_info(video);
+	if (!video)
+		return false;
 
-		video_scale_info conversion = {};
-		conversion.format = VIDEO_FORMAT_UYVY;
-		conversion.width = info->width;
-		conversion.height = info->height;
-		conversion.range = VIDEO_RANGE_PARTIAL;
-		conversion.colorspace = info->height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
-		obs_output_set_video_conversion(context->output, &conversion);
-	}
+	context->conversion = conversion_for(video_output_get_info(video));
+	obs_output_set_video_conversion(context->output, &context->conversion);
 
 	if (!context->session.start(protocol, config))
 		return false;
@@ -162,7 +181,7 @@ void output_raw_video(void *data, video_data *frame)
 	if (!video)
 		return;
 
-	context->session.push_video(to_video_frame(frame, video_output_get_info(video)));
+	context->session.push_video(to_video_frame(frame, video_output_get_info(video), context->conversion));
 }
 
 void output_raw_audio(void *data, audio_data *frames)
