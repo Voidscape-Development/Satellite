@@ -158,10 +158,12 @@ src/
   obs/
     satellite-source.{hpp,cpp} obs_source_info — unified receiver
     satellite-filter.{hpp,cpp} obs_source_info — unified sender filter
-    satellite-output.{hpp,cpp} obs_output_info + Program/Preview wiring
+    satellite-output.{hpp,cpp} obs_output_info + Program/Preview/canvas wiring
 
   ui/
     satellite-dock.{hpp,cpp}   the Satellite window
+    feed-table.{hpp,cpp}       the adaptive feed grid inside it
+    status-colors.hpp          the few semantic colours not taken from the theme
     sparkline.{hpp,cpp}        tiny self-painted history widget, no chart dependency
 
   config/
@@ -262,6 +264,31 @@ backend a plane count that does not match the bytes, and NDI reads half a frame 
 of the buffer. `SenderSession::push_video` copies one plane and drops anything that is not a
 single-plane format, so that mismatch can only ever cost a frame.
 
+### 7.3.1 Canvas senders
+
+OBS 31.1 added additional canvases (`obs_canvas_t`) — what plugins such as Aitum Vertical
+use for a vertical scene set. The Satellite window can add any number of canvas senders,
+each naming a canvas, a sender name, a protocol and a mixer track. They use the same
+`satellite_output` as Program and Preview; only where the frames come from differs.
+
+- **Rendered through a view of our own, not the canvas's `video_t`.** Whoever owns a
+  canvas can call `obs_canvas_reset_video` at any time. That frees the canvas's video mix
+  immediately and signals `video_reset` only *afterwards*, so an output attached to the
+  old `video_t` would be stopped through freed memory. The sender instead mirrors the
+  canvas's channels into its own `obs_view` at the canvas's video settings, exactly as the
+  Preview sender does for the preview scene. The cost is a second render of the canvas.
+- **Canvas signals are deferred.** `remove`, `video_reset` and `channel_change` (and the
+  global `canvas_create`, so a sender whose canvas appears late still starts) arrive on
+  whatever thread changed the canvas, often under its locks. The handler only queues one
+  coalesced `update_frontend_outputs()` onto the UI thread, where the senders live.
+- **Identity.** A sender remembers its canvas by UUID with the name as a fallback, since a
+  canvas that is not saved with the scene collection is recreated with a new UUID. Each
+  sender has a stable id of its own, so editing or removing one never restarts another.
+- **Audio.** Canvases have no audio of their own — OBS mixes audio globally — so a canvas
+  sender carries one of the six mixer tracks (`obs_output_set_mixer`), or none.
+- **Older OBS.** Against a libobs before 31.1 the canvas code compiles out
+  (`SATELLITE_HAVE_CANVASES`) and the Satellite window says why canvases are unavailable.
+
 ### 7.4 Tally
 
 Bidirectional, per decision #6. Note which side does which — it is the opposite of what the
@@ -283,11 +310,16 @@ names suggest, because in both protocols it is the *receiver* that reports tally
 A native OBS dock (`obs_frontend_add_dock_by_id`) plus a **Tools → Satellite** item that
 shows and raises it.
 
-**Runtime status strip** — one row per protocol: detected or not, version, and for NDI an
-install link when the runtime is missing. This is the DistroAV-style "is the NDI library
-installed" affordance.
+The window is a compact status strip over three tabs, so the feed grid — the part people
+watch — gets most of the height, and settings that are set once stay out of the way. The
+tab last used is remembered.
 
-**Feed table** — one row per active feed, either direction:
+**Status strip** — a dot and version per protocol, and how many feeds are sending and
+receiving. When a protocol is unavailable a one-line-per-protocol banner appears beneath it
+with the install link (NDI) and a re-check button; it can be dismissed until the problem
+changes. This is the DistroAV-style "is the NDI library installed" affordance.
+
+**Feeds tab** — one row per active feed, either direction:
 
 | Column | Source |
 |---|---|
@@ -308,7 +340,26 @@ Frame rate, codec time, peak bitrate and whether the bitrate is exact or measure
 row's tooltip rather than in columns. A dock is narrow, and a column each for numbers people
 look at once would make the table unreadable.
 
-**Output controls** — Program and Preview sender configuration, per §7.3.
+The grid adapts to its width rather than scrolling sideways (`FeedTable`):
+
+- Columns have a priority — name, state, bitrate, tally, direction, protocol, history,
+  video, dropped, audio, connections — and the least important are hidden first when they
+  stop fitting. Fit is judged from representative content, not the current rows, so the
+  layout does not jump as feeds come and go.
+- Right-clicking the header turns columns off for good (saved); the menu also says which
+  columns are currently hidden for lack of room.
+- Below 480 px, or when name, state and bitrate no longer fit, each feed becomes a two-line
+  row: state dot, name and tally badge, then protocol, direction, format, bitrate and drops
+  underneath, with the sparkline kept on the right.
+- Rows are keyed by feed id, so a feed keeps its row and selection as others come and go.
+- With no feeds, the grid is replaced by a short note on how to get one.
+
+**Senders tab** — a card per sender with its live state (off, live, waiting on Studio
+Mode or on a canvas, or failed, with the reason in the tooltip): Program and Preview per
+§7.3, then the canvas senders per §7.3.1.
+
+**Settings tab** — the full runtime details with a re-check, the network settings of
+§10.1, and the DistroAV import.
 
 `Sparkline` is a ~100-line self-painted `QWidget` over a ring buffer. No charting library,
 no new dependency, and it respects the OBS theme palette.
@@ -316,9 +367,10 @@ no new dependency, and it respects the OBS theme palette.
 ## 9. Configuration
 
 Global plugin settings (not per-profile) in the module config directory, via
-`obs_data_t`. Covers Program/Preview sender config, discovery preferences, per-protocol
-advanced settings (NDI groups, OMT discovery server and port range), and the "DistroAV
-import already offered" flag.
+`obs_data_t`. Covers Program/Preview and canvas sender config, discovery preferences,
+per-protocol advanced settings (NDI groups, OMT discovery server and port range), the
+"DistroAV import already offered" flag, and the Satellite window's last tab and hidden
+feed columns.
 
 Per-source and per-filter settings live in the normal OBS settings blob, so they travel
 with the scene collection.

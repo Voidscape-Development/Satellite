@@ -21,6 +21,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "transport/transport.hpp"
 
 #include <string>
+#include <vector>
 
 namespace satellite {
 
@@ -33,6 +34,25 @@ struct OutputConfig {
 	bool send_audio = true;
 };
 
+/// Configuration for one sender of an additional OBS canvas (OBS 31.1 and later), such as
+/// a vertical canvas added by another plugin.
+///
+/// The canvas is remembered by UUID, with its name as a fallback: a canvas that is not
+/// saved with the scene collection gets a fresh UUID each launch but keeps its name.
+struct CanvasSenderConfig {
+	/// Stable per-sender id, so editing or removing one sender never restarts another.
+	int id = 0;
+	bool enabled = false;
+	std::string canvas_uuid;
+	std::string canvas_name;
+	std::string name;
+	Protocol protocol = Protocol::NDI;
+	Quality quality = Quality::Default;
+	/// 0 sends no audio; 1-6 send that OBS mixer track. Canvases have no audio of their
+	/// own - OBS mixes all audio globally - so a track is the only meaningful choice.
+	int audio_track = 1;
+};
+
 /// Global plugin settings, stored in the module config directory rather than per-profile,
 /// so a Satellite install behaves the same across every profile.
 ///
@@ -41,6 +61,7 @@ struct OutputConfig {
 struct Config {
 	OutputConfig program;
 	OutputConfig preview;
+	std::vector<CanvasSenderConfig> canvas_senders;
 
 	/// OMT: written through omt_settings_set_string("DiscoveryServer", ...). Empty means
 	/// default DNS-SD behaviour.
@@ -53,6 +74,14 @@ struct Config {
 
 	/// Set once the DistroAV import has been offered, so the user is not asked again.
 	bool distroav_import_offered = false;
+
+	/// Satellite window state: the tab last shown, and the feed columns the user has
+	/// turned off, as a comma-separated list of column keys.
+	int dock_tab = 0;
+	std::string feed_hidden_columns;
+
+	/// The id for a new canvas sender: one past the highest in use.
+	int next_canvas_sender_id() const;
 
 	static Config &instance();
 
