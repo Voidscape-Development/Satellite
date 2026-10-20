@@ -60,7 +60,9 @@ void Sparkline::paintEvent(QPaintEvent *)
 	if (maximum <= 0.0)
 		return;
 
-	const QRectF area = rect().adjusted(1, 1, -1, -1);
+	// The contents rect, so whoever places the sparkline can give it breathing room - the
+	// feed table pads it more in its taller two-line rows.
+	const QRectF area = QRectF(contentsRect()).adjusted(1, 1, -1, -1);
 	if (area.width() <= 0.0 || area.height() <= 0.0)
 		return;
 

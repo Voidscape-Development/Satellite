@@ -29,10 +29,14 @@ plugin.
   game capture, browser sources and scenes, not just cameras and media files
 - **Program and Preview outputs** — independently configurable from the Satellite window;
   Preview runs only while Studio Mode is active
+- **Canvas senders** — on OBS 31.1 and later, send any additional canvas (a vertical canvas
+  from Aitum Vertical, say) as its own feed, with its choice of mixer track for audio
 - **Full bidirectional tally** — your sources tell remote senders when they are live here,
   and your senders show whether someone downstream has you on air
-- **The Satellite window** — an OBS dock listing every active feed in either direction with
-  its state, format, bitrate, dropped frames and a rolling history sparkline
+- **The Satellite window** — an OBS dock with a status strip over Feeds, Senders and Settings
+  tabs. The feed grid lists every active feed in either direction with its state, format,
+  bitrate, dropped frames, tally and a rolling history sparkline, and adapts to the dock's
+  width: low-priority columns step aside first, and a narrow dock gets two-line rows
 - **Runtime status** — whether each protocol's library is present, with an install link for
   NDI and a re-check button so installing it does not need an OBS restart
 - **DistroAV import** — converts an existing DistroAV setup, showing exactly what it will do

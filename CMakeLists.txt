@@ -93,12 +93,15 @@ target_sources(
     src/transport/rate-meter.hpp
     src/transport/transport.cpp
     src/transport/transport.hpp
+    src/ui/feed-table.cpp
+    src/ui/feed-table.hpp
     src/ui/import-dialog.cpp
     src/ui/import-dialog.hpp
     src/ui/satellite-dock.cpp
     src/ui/satellite-dock.hpp
     src/ui/sparkline.cpp
     src/ui/sparkline.hpp
+    src/ui/status-colors.hpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

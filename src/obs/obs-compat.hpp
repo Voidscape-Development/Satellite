@@ -29,6 +29,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <obs-frontend-api.h>
 #include <obs.h>
 
+/// Additional canvases (obs_canvas_t) arrived in OBS 31.1. Against an older libobs the canvas
+/// senders compile out and the Satellite window says why they are unavailable.
+#if LIBOBS_API_VER >= MAKE_SEMANTIC_VERSION(31, 1, 0)
+#define SATELLITE_HAVE_CANVASES 1
+#else
+#define SATELLITE_HAVE_CANVASES 0
+#endif
+
 namespace satellite {
 
 /// OBS's per-user configuration.
