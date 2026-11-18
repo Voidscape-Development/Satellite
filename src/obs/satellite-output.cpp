@@ -38,55 +38,78 @@ namespace satellite {
 namespace {
 
 constexpr const char *kOutputId = "satellite_output";
-
-constexpr const char *kSettingProtocol = "protocol";
-constexpr const char *kSettingName = "name";
-constexpr const char *kSettingQuality = "quality";
-constexpr const char *kSettingAudio = "send_audio";
+constexpr const char *kVideoOutputId = "satellite_video_output";
 
 struct OutputContext {
 	obs_output_t *output = nullptr;
-	SenderSession session;
-	/// What output_start asked OBS to convert to, which is what the raw_video callback
-	/// then receives. Kept here because the video_t still reports its own unconverted
-	/// format and nothing else describes the bytes that actually arrive.
-	video_scale_info conversion = {};
+	/// Where the frames go. Set by SenderCapture straight after the output is created, and
+	/// never owned here: the session outlives every capture that feeds it.
+	SenderSession *session = nullptr;
+	/// What the raw_video callback actually receives - the mix's own format when it can go
+	/// out as it is, the requested conversion when it cannot. Kept here because after a
+	/// conversion the video_t still reports its unconverted format, and nothing else
+	/// describes the bytes that arrive.
+	video_scale_info delivered = {};
 	bool capturing = false;
 };
 
-/// Fills in the requested conversion for this output. Split out so the frame description and
-/// the conversion request cannot drift apart.
-video_scale_info conversion_for(const video_output_info *info)
+/// Neither protocol's frame says much about colour, so receivers assume the broadcast
+/// convention: limited range, BT.709 for HD and BT.601 below it. That is what is sent.
+video_colorspace colorspace_for(uint32_t height)
 {
-	video_scale_info conversion = {};
-
-	conversion.format = VIDEO_FORMAT_UYVY;
-	conversion.width = info->width;
-	conversion.height = info->height;
-	conversion.range = VIDEO_RANGE_PARTIAL;
-	conversion.colorspace = info->height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
-
-	return conversion;
+	return height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
 }
 
-VideoFrame to_video_frame(const video_data *data, const video_output_info *info, const video_scale_info &conversion)
+/// Whether the mix's own frames can be sent untouched.
+///
+/// True for NV12 in the colour receivers will assume, which is what OBS produces unless its
+/// advanced video settings have been changed. Both protocols take NV12 directly, so this is
+/// the path with no per-frame pixel conversion at all: OBS already converted on the GPU.
+bool sendable_as_is(const video_output_info *info)
+{
+	const video_colorspace wanted = colorspace_for(info->height);
+	const bool same_matrix = info->colorspace == wanted ||
+				 (wanted == VIDEO_CS_709 && info->colorspace == VIDEO_CS_SRGB);
+
+	return info->format == VIDEO_FORMAT_NV12 && info->range == VIDEO_RANGE_PARTIAL && same_matrix;
+}
+
+/// Describes the frames a sender takes from this video: as they are when sendable_as_is,
+/// and otherwise as UYVY - which both protocols also take directly - for OBS to convert to.
+video_scale_info delivery_for(const video_output_info *info)
+{
+	video_scale_info delivered = {};
+
+	delivered.format = sendable_as_is(info) ? VIDEO_FORMAT_NV12 : VIDEO_FORMAT_UYVY;
+	delivered.width = info->width;
+	delivered.height = info->height;
+	delivered.range = VIDEO_RANGE_PARTIAL;
+	delivered.colorspace = colorspace_for(info->height);
+
+	return delivered;
+}
+
+VideoFrame to_video_frame(const video_data *data, const video_output_info *info, const video_scale_info &delivered)
 {
 	VideoFrame frame = {};
 
-	// OBS applies the conversion before the frame reaches this callback, so the conversion
-	// - not the video output's own info - is what describes data[0]. Taking the format from
-	// info instead would label a UYVY buffer with the mix's format (NV12 by default), and
-	// the backend would then read a plane that is not there.
-	frame.width = conversion.width;
-	frame.height = conversion.height;
-	frame.format = conversion.format;
-	frame.colorspace = conversion.colorspace;
-	frame.range = conversion.range;
+	// What was asked for - not the video output's own info - is what describes the data:
+	// when OBS converts, it does so before the frame reaches this callback. Taking the
+	// format from info instead would label a UYVY buffer with the mix's format, and the
+	// backend would then read a plane that is not there.
+	frame.width = delivered.width;
+	frame.height = delivered.height;
+	frame.format = delivered.format;
+	frame.colorspace = delivered.colorspace;
+	frame.range = delivered.range;
 	frame.framerate_num = info->fps_num;
 	frame.framerate_den = info->fps_den;
 	frame.timestamp_ns = data->timestamp;
-	frame.data[0] = data->data[0];
-	frame.linesize[0] = data->linesize[0];
+
+	for (size_t plane = 0; plane < MAX_AV_PLANES; ++plane) {
+		frame.data[plane] = data->data[plane];
+		frame.linesize[plane] = data->linesize[plane];
+	}
 
 	return frame;
 }
@@ -127,41 +150,26 @@ bool output_start(void *data)
 {
 	auto *context = static_cast<OutputContext *>(data);
 
-	obs_data_t *settings = obs_output_get_settings(context->output);
-
-	Protocol protocol = Protocol::NDI;
-	protocol_from_id(obs_data_get_string(settings, kSettingProtocol), protocol);
-
-	Quality quality = Quality::Default;
-	quality_from_id(obs_data_get_string(settings, kSettingQuality), quality);
-
-	SenderConfig config;
-	const char *name = obs_data_get_string(settings, kSettingName);
-	config.name = name ? name : "";
-	config.quality = quality;
-	config.send_audio = obs_data_get_bool(settings, kSettingAudio);
-
-	obs_data_release(settings);
+	if (!context->session)
+		return false;
 
 	if (!obs_output_can_begin_data_capture(context->output, 0))
 		return false;
 
-	// Ask OBS for UYVY. Both protocols take it directly, so the frame that reaches the
-	// backend needs no pixel conversion - the same zero-conversion path as receiving.
 	video_t *video = obs_output_video(context->output);
 	if (!video)
 		return false;
 
-	context->conversion = conversion_for(video_output_get_info(video));
-	obs_output_set_video_conversion(context->output, &context->conversion);
+	const video_output_info *info = video_output_get_info(video);
+	context->delivered = delivery_for(info);
 
-	if (!context->session.start(protocol, config))
-		return false;
+	// Only when the mix's own frames cannot go out as they are. A conversion runs on the
+	// CPU, per frame, on a thread this output shares with everything else reading the
+	// same video - the encoders, for the main mix.
+	if (!sendable_as_is(info))
+		obs_output_set_video_conversion(context->output, &context->delivered);
 
 	context->capturing = obs_output_begin_data_capture(context->output, 0);
-	if (!context->capturing)
-		context->session.stop();
-
 	return context->capturing;
 }
 
@@ -173,8 +181,6 @@ void output_stop(void *data, uint64_t)
 		obs_output_end_data_capture(context->output);
 		context->capturing = false;
 	}
-
-	context->session.stop();
 }
 
 void output_raw_video(void *data, video_data *frame)
@@ -182,10 +188,10 @@ void output_raw_video(void *data, video_data *frame)
 	auto *context = static_cast<OutputContext *>(data);
 
 	video_t *video = obs_output_video(context->output);
-	if (!video)
+	if (!video || !context->session)
 		return;
 
-	context->session.push_video(to_video_frame(frame, video_output_get_info(video), context->conversion));
+	context->session->push_video(to_video_frame(frame, video_output_get_info(video), context->delivered));
 }
 
 void output_raw_audio(void *data, audio_data *frames)
@@ -193,14 +199,52 @@ void output_raw_audio(void *data, audio_data *frames)
 	auto *context = static_cast<OutputContext *>(data);
 
 	audio_t *audio = obs_output_audio(context->output);
-	if (!audio)
+	if (!audio || !context->session)
 		return;
 
-	context->session.push_audio(to_audio_frame(frames, audio_output_get_info(audio)));
+	context->session->push_audio(to_audio_frame(frames, audio_output_get_info(audio)));
+}
+
+/// Set once the frontend senders have been torn down, so that an update queued just before
+/// shutdown cannot start them again.
+std::atomic<bool> g_shut_down{false};
+std::atomic<bool> g_update_queued{false};
+
+/// Asks for update_frontend_outputs() on the UI thread, where the senders are owned.
+///
+/// Called from threads that must not do the work themselves: a sender's own send thread,
+/// when its first receiver arrives or its last one leaves, and whichever thread changed a
+/// canvas, often with the canvas's locks held. Coalesced, so a burst costs one update.
+void queue_update()
+{
+	if (g_shut_down.load() || g_update_queued.exchange(true))
+		return;
+
+	obs_queue_task(
+		OBS_TASK_UI,
+		[](void *) {
+			g_update_queued.store(false);
+			if (!g_shut_down.load())
+				update_frontend_outputs();
+		},
+		nullptr, false);
+}
+
+SenderConfig session_config(const std::string &name, Quality quality, bool send_audio)
+{
+	SenderConfig config;
+	config.name = name;
+	config.quality = quality;
+	config.send_audio = send_audio;
+	return config;
 }
 
 /// One of the two frontend senders. Program follows the main mix; Preview renders the
 /// preview scene through its own view, because OBS exposes no video_t for it.
+///
+/// "Running" means the feed is on the network. Frames are only captured while somebody is
+/// receiving it: for Program that spares OBS a GPU readback of every frame, and for Preview
+/// a second render of the scene as well.
 class FrontendSender {
 public:
 	explicit FrontendSender(bool is_preview) : is_preview_(is_preview) {}
@@ -213,27 +257,20 @@ public:
 
 		const bool want_running = allowed && desired.enabled && !desired.name.empty();
 
-		if (running_ && (!want_running || changed(desired))) {
+		if (running_ && (!want_running || changed(desired)))
 			stop();
-		} else if (running_ && is_preview_) {
-			// Same configuration, but the preview scene may have changed under us.
-			refresh_preview_scene();
-			return;
-		}
 
 		if (want_running && !running_)
 			start(desired);
+
+		if (running_)
+			sync_capture();
 	}
 
 	void stop()
 	{
-		if (output_) {
-			obs_output_stop(output_);
-			obs_output_release(output_);
-			output_ = nullptr;
-		}
-
-		release_view();
+		stop_capture();
+		session_.stop();
 		running_ = false;
 	}
 
@@ -267,8 +304,68 @@ private:
 		       config_.send_audio != desired.send_audio;
 	}
 
-	void release_view()
+	void start(const OutputConfig &desired)
 	{
+		last_error_.clear();
+
+		if (!session_.start(desired.protocol, session_config(desired.name, desired.quality, desired.send_audio),
+				    queue_update)) {
+			last_error_ = obs_module_text("Satellite.Sender.CouldNotStart");
+			return;
+		}
+
+		config_ = desired;
+		running_ = true;
+	}
+
+	/// Brings the capture in line with whether anybody is receiving. Runs on every update,
+	/// and the session queues an update whenever the answer changes.
+	void sync_capture()
+	{
+		if (!session_.wanted()) {
+			stop_capture();
+			return;
+		}
+
+		if (capture_.active()) {
+			// Already capturing, but the preview scene may have changed under us.
+			refresh_preview_scene();
+			return;
+		}
+
+		video_t *video = nullptr;
+		if (is_preview_) {
+			// OBS has no preview video_t to borrow, so the preview scene is rendered
+			// into a view of our own at the project's current video settings.
+			obs_video_info ovi = {};
+			if (obs_get_video_info(&ovi)) {
+				view_ = obs_view_create();
+				refresh_preview_scene();
+				video = obs_view_add2(view_, &ovi);
+			}
+		} else {
+			video = obs_get_video();
+		}
+
+		const char *id = is_preview_ ? "satellite_preview" : "satellite_program";
+		if (capture_.start(id, session_, video, config_.send_audio ? 0 : -1))
+			return;
+
+		const std::string error = capture_.error();
+		obs_log(LOG_WARNING, "could not start the %s sender: %s", is_preview_ ? "Preview" : "Program",
+			error.c_str());
+
+		// Stopped outright rather than left on the network with no picture, and so that
+		// the next update - not the next frame - is what tries again.
+		stop();
+		last_error_ = error;
+	}
+
+	void stop_capture()
+	{
+		// The output first: it holds the view's video_t until it has stopped.
+		capture_.stop();
+
 		if (!view_)
 			return;
 
@@ -276,7 +373,6 @@ private:
 		obs_view_remove(view_);
 		obs_view_destroy(view_);
 		view_ = nullptr;
-		view_video_ = nullptr;
 	}
 
 	void refresh_preview_scene()
@@ -285,64 +381,14 @@ private:
 			return;
 
 		obs_source_t *scene = obs_frontend_get_current_preview_scene();
-		obs_view_set_source(view_, 0, scene);
+		obs_source_t *current = obs_view_get_source(view_, 0);
+
+		// Setting the same source again would deactivate and reactivate it.
+		if (scene != current)
+			obs_view_set_source(view_, 0, scene);
+
+		obs_source_release(current);
 		obs_source_release(scene);
-	}
-
-	void start(const OutputConfig &desired)
-	{
-		last_error_.clear();
-
-		obs_data_t *settings = obs_data_create();
-		obs_data_set_string(settings, kSettingName, desired.name.c_str());
-		obs_data_set_string(settings, kSettingProtocol, protocol_id(desired.protocol));
-		obs_data_set_string(settings, kSettingQuality, quality_id(desired.quality));
-		obs_data_set_bool(settings, kSettingAudio, desired.send_audio);
-
-		const std::string id = is_preview_ ? "satellite_preview" : "satellite_program";
-		output_ = obs_output_create(kOutputId, id.c_str(), settings, nullptr);
-		obs_data_release(settings);
-
-		if (!output_)
-			return;
-
-		video_t *video = nullptr;
-		if (is_preview_) {
-			// OBS has no preview video_t to borrow, so the preview scene is rendered
-			// into a view of our own at the project's current video settings.
-			obs_video_info ovi = {};
-			if (!obs_get_video_info(&ovi)) {
-				stop();
-				return;
-			}
-
-			view_ = obs_view_create();
-			refresh_preview_scene();
-
-			view_video_ = obs_view_add2(view_, &ovi);
-			video = view_video_;
-		} else {
-			video = obs_get_video();
-		}
-
-		if (!video) {
-			stop();
-			return;
-		}
-
-		obs_output_set_media(output_, video, obs_get_audio());
-
-		if (!obs_output_start(output_)) {
-			const char *error = obs_output_get_last_error(output_);
-			obs_log(LOG_WARNING, "could not start the %s sender: %s", is_preview_ ? "Preview" : "Program",
-				error ? error : "unknown error");
-			stop();
-			last_error_ = error ? error : obs_module_text("Satellite.Sender.CouldNotStart");
-			return;
-		}
-
-		config_ = desired;
-		running_ = true;
 	}
 
 	bool is_preview_ = false;
@@ -352,40 +398,17 @@ private:
 	OutputConfig desired_;
 	std::string last_error_;
 
-	obs_output_t *output_ = nullptr;
+	SenderSession session_;
+	SenderCapture capture_;
 	obs_view_t *view_ = nullptr;
-	video_t *view_video_ = nullptr;
 };
 
 FrontendSender g_program(false);
 FrontendSender g_preview(true);
 
-/// Set once the frontend senders have been torn down, so that an update queued by a canvas
-/// signal just before shutdown cannot start them again.
-std::atomic<bool> g_shut_down{false};
-
 #if SATELLITE_HAVE_CANVASES
 
-std::atomic<bool> g_update_queued{false};
 bool g_canvas_signals_connected = false;
-
-/// Canvas signals arrive on whichever thread changed the canvas, often with the canvas's own
-/// locks held. Nothing is done there: the update is deferred to the UI thread, where the
-/// senders are owned, and coalesced so a burst of scene changes costs one update.
-void queue_update()
-{
-	if (g_shut_down.load() || g_update_queued.exchange(true))
-		return;
-
-	obs_queue_task(
-		OBS_TASK_UI,
-		[](void *) {
-			g_update_queued.store(false);
-			if (!g_shut_down.load())
-				update_frontend_outputs();
-		},
-		nullptr, false);
-}
 
 void on_canvas_signal(void *, calldata_t *)
 {
@@ -437,6 +460,8 @@ bool same_video(const obs_video_info &a, const obs_video_info &b)
 /// whoever owns a canvas can reset its video at any moment, which frees the canvas's video_t
 /// with no warning beforehand, and an output still attached to it would then be torn down
 /// through freed memory. A view of our own has a video_t that only we free.
+///
+/// Like the other senders it only pays that price while somebody is receiving the feed.
 class CanvasSender {
 public:
 	explicit CanvasSender(int id) : id_(id) {}
@@ -456,30 +481,19 @@ public:
 		if (running_ && (!want_running || changed(desired) || canvas != canvas_ || video_changed()))
 			stop();
 
-		if (running_)
-			// Same canvas, same settings, but its scene or transition may have changed.
-			sync_channels();
-		else if (canvas)
+		if (canvas && !running_)
 			start(desired, canvas);
+
+		if (running_)
+			sync_capture();
 
 		obs_canvas_release(canvas);
 	}
 
 	void stop()
 	{
-		if (output_) {
-			obs_output_stop(output_);
-			obs_output_release(output_);
-			output_ = nullptr;
-		}
-
-		if (view_) {
-			for (uint32_t channel = 0; channel < MAX_CHANNELS; ++channel)
-				obs_view_set_source(view_, channel, nullptr);
-			obs_view_remove(view_);
-			obs_view_destroy(view_);
-			view_ = nullptr;
-		}
+		stop_capture();
+		session_.stop();
 
 		if (canvas_) {
 			signal_handler_t *handler = obs_canvas_get_signal_handler(canvas_);
@@ -550,9 +564,10 @@ private:
 		}
 	}
 
-	void fail(const char *reason)
+	void fail(const std::string &reason)
 	{
-		obs_log(LOG_WARNING, "could not start the canvas sender '%s': %s", desired_.name.c_str(), reason);
+		obs_log(LOG_WARNING, "could not start the canvas sender '%s': %s", desired_.name.c_str(),
+			reason.c_str());
 		stop();
 		last_error_ = reason;
 	}
@@ -567,24 +582,12 @@ private:
 			return;
 		}
 
-		obs_data_t *settings = obs_data_create();
-		obs_data_set_string(settings, kSettingName, desired.name.c_str());
-		obs_data_set_string(settings, kSettingProtocol, protocol_id(desired.protocol));
-		obs_data_set_string(settings, kSettingQuality, quality_id(desired.quality));
-		obs_data_set_bool(settings, kSettingAudio, desired.audio_track > 0);
-
-		const std::string id = "satellite_canvas_" + std::to_string(id_);
-		output_ = obs_output_create(kOutputId, id.c_str(), settings, nullptr);
-		obs_data_release(settings);
-
-		if (!output_) {
+		if (!session_.start(desired.protocol,
+				    session_config(desired.name, desired.quality, desired.audio_track > 0),
+				    queue_update)) {
 			fail(obs_module_text("Satellite.Sender.CouldNotStart"));
 			return;
 		}
-
-		// A raw output takes its audio from a single mixer track; this picks which.
-		if (desired.audio_track > 0)
-			obs_output_set_mixer(output_, static_cast<size_t>(desired.audio_track - 1));
 
 		canvas_ = obs_canvas_get_ref(canvas);
 		ovi_ = ovi;
@@ -593,25 +596,47 @@ private:
 		for (const char *signal : kCanvasSignals)
 			signal_handler_connect(handler, signal, on_canvas_signal, this);
 
+		config_ = desired;
+		running_ = true;
+	}
+
+	/// Brings the capture in line with whether anybody is receiving. Runs on every update,
+	/// and the session queues an update whenever the answer changes.
+	void sync_capture()
+	{
+		if (!session_.wanted()) {
+			stop_capture();
+			return;
+		}
+
+		if (capture_.active()) {
+			// Already capturing, but the canvas's scene or transition may have changed.
+			sync_channels();
+			return;
+		}
+
 		view_ = obs_view_create();
 		sync_channels();
 
-		video_t *video = obs_view_add2(view_, &ovi);
-		if (!video) {
-			fail(obs_module_text("Satellite.Sender.CouldNotStart"));
+		// A raw output takes its audio from a single mixer track; this picks which.
+		const std::string id = "satellite_canvas_" + std::to_string(id_);
+		if (!capture_.start(id.c_str(), session_, obs_view_add2(view_, &ovi_), config_.audio_track - 1))
+			fail(std::string(capture_.error()));
+	}
+
+	void stop_capture()
+	{
+		// The output first: it holds the view's video_t until it has stopped.
+		capture_.stop();
+
+		if (!view_)
 			return;
-		}
 
-		obs_output_set_media(output_, video, obs_get_audio());
-
-		if (!obs_output_start(output_)) {
-			const char *error = obs_output_get_last_error(output_);
-			fail(error ? error : obs_module_text("Satellite.Sender.CouldNotStart"));
-			return;
-		}
-
-		config_ = desired;
-		running_ = true;
+		for (uint32_t channel = 0; channel < MAX_CHANNELS; ++channel)
+			obs_view_set_source(view_, channel, nullptr);
+		obs_view_remove(view_);
+		obs_view_destroy(view_);
+		view_ = nullptr;
 	}
 
 	const int id_;
@@ -623,7 +648,8 @@ private:
 
 	obs_canvas_t *canvas_ = nullptr;
 	obs_video_info ovi_ = {};
-	obs_output_t *output_ = nullptr;
+	SenderSession session_;
+	SenderCapture capture_;
 	obs_view_t *view_ = nullptr;
 };
 
@@ -684,6 +710,62 @@ void register_satellite_output()
 	info.raw_audio = output_raw_audio;
 
 	obs_register_output(&info);
+
+	// The same output without audio, for a sender that carries none or - the Sender
+	// filter - takes it from its source instead of from a mixer track.
+	static obs_output_info video_only = info;
+
+	video_only.id = kVideoOutputId;
+	video_only.flags = OBS_OUTPUT_VIDEO;
+	video_only.raw_audio = nullptr;
+
+	obs_register_output(&video_only);
+}
+
+bool SenderCapture::start(const char *name, SenderSession &session, video_t *video, int mixer_track)
+{
+	stop();
+	error_ = obs_module_text("Satellite.Sender.CouldNotStart");
+
+	if (!video)
+		return false;
+
+	const bool with_audio = mixer_track >= 0;
+
+	obs_output_t *output = obs_output_create(with_audio ? kOutputId : kVideoOutputId, name, nullptr, nullptr);
+	if (!output)
+		return false;
+
+	static_cast<OutputContext *>(obs_obj_get_data(output))->session = &session;
+
+	if (with_audio)
+		obs_output_set_mixer(output, static_cast<size_t>(mixer_track));
+	obs_output_set_media(output, video, obs_get_audio());
+
+	if (!obs_output_start(output)) {
+		const char *error = obs_output_get_last_error(output);
+		if (error && *error)
+			error_ = error;
+
+		obs_output_release(output);
+		return false;
+	}
+
+	output_ = output;
+	error_.clear();
+	return true;
+}
+
+void SenderCapture::stop()
+{
+	if (!output_)
+		return;
+
+	// Releasing the last reference waits for the output to finish stopping, so no frame
+	// reaches the session, and nothing touches the video_t, once this returns.
+	obs_output_stop(output_);
+	obs_output_release(output_);
+	output_ = nullptr;
 }
 
 void update_frontend_outputs()

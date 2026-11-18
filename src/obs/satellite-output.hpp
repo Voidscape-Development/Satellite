@@ -22,11 +22,48 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <string>
 #include <vector>
 
+#include <obs.h>
+
 namespace satellite {
 
-/// Registers "satellite_output", the raw AV output backing the Program and Preview senders.
-/// Configured from the Satellite window rather than from a source.
+class SenderSession;
+
+/// Registers the raw outputs every sender takes its frames through: "satellite_output",
+/// video with one mixer track of audio, and "satellite_video_output", video alone.
 void register_satellite_output();
+
+/// Feeds a SenderSession from a video_t for as long as it is started.
+///
+/// This is the only thing that makes OBS produce frames for a sender, and so the only part
+/// of one that costs render time: while it is started OBS reads every frame of that video
+/// mix back from the GPU. Senders therefore start it when their session is wanted() and stop
+/// it when it is not, leaving the session - the feed on the network - up throughout.
+///
+/// It goes through an obs_output rather than video_output_connect because only an output
+/// tells the mix that somebody wants raw frames. A callback connected directly is never
+/// called on a view's mix: nothing asks that mix to download anything.
+class SenderCapture {
+public:
+	SenderCapture() = default;
+	~SenderCapture() { stop(); }
+
+	SenderCapture(const SenderCapture &) = delete;
+	SenderCapture &operator=(const SenderCapture &) = delete;
+
+	/// mixer_track is the zero-based audio track to send with the video, or -1 for none.
+	/// The session has to outlive the capture, and so does the video_t: stop() before
+	/// tearing down the view that owns it.
+	bool start(const char *name, SenderSession &session, video_t *video, int mixer_track);
+	void stop();
+	bool active() const { return output_ != nullptr; }
+
+	/// Why the last start() failed.
+	const std::string &error() const { return error_; }
+
+private:
+	obs_output_t *output_ = nullptr;
+	std::string error_;
+};
 
 /// Applies the current Config to every frontend sender - Program, Preview and each canvas
 /// sender - starting or stopping each as needed. Safe to call repeatedly; called on
@@ -39,7 +76,7 @@ void shutdown_frontend_outputs();
 /// What one frontend sender is doing, for the Satellite window.
 enum class SenderState {
 	Off,     //< not enabled
-	Live,    //< running
+	Live,    //< on the network, whether or not anybody is receiving it yet
 	Waiting, //< enabled, but waiting on something outside Satellite (Studio Mode, a canvas)
 	Failed,  //< enabled, and could not start
 };

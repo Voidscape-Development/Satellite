@@ -113,8 +113,9 @@ networks where multicast is blocked (`omt_settings_set_string("DiscoveryServer",
 
 Crucially, the **pixel and sample formats match OBS natively on both sides**:
 
-- Both protocols prefer **UYVY** for video, which is `VIDEO_FORMAT_UYVY` in OBS. The common
-  path needs no conversion.
+- Both protocols prefer **UYVY** for video, which is `VIDEO_FORMAT_UYVY` in OBS, and both
+  also take **NV12**, which is what OBS's own video mix produces by default. The common
+  path needs no conversion in either direction.
 - Both carry **32-bit planar float audio** (OMT calls it `FPA1`, NDI's audio v3 is the
   same layout), which is OBS's internal `AUDIO_FORMAT_FLOAT_PLANAR`. Again no conversion.
 - Both express timestamps in **100 ns units**. OBS uses nanoseconds, so the conversion is a
@@ -249,20 +250,48 @@ One `obs_source_info` of type filter, attachable to any source. Properties: prot
 sender name, quality, and **include audio** (default on, with a toggle — the filtered
 source's audio is captured alongside its video rather than being video-only).
 
+The source is rendered through a view of the filter's own, **the size of the source** rather
+than of the canvas (rounded up to even dimensions), and restarted when that size changes. A
+720p camera on a 4K canvas is a 720p feed and costs a 720p render. The view holds a reference
+to the source, so the filter drops it as soon as the source is removed.
+
 ### 7.3 Program / Preview output
 
 An `obs_output_info` plus frontend wiring, configured from the Satellite window rather than
 from a source: independent enable, name and quality for Program and for Preview, and the
 Preview sender starts only when Studio Mode is active.
 
-Both senders ask OBS to convert to UYVY before the frame reaches them — the filter through
-`video_output_connect`, the output through `obs_output_set_video_conversion`. The converted
-frame is what the callback receives, but the `video_t` keeps reporting its *own* format
-(NV12 for the usual mix), so the requested conversion is what each of them carries forward
-as the frame's description. Taking the format from the `video_output_info` instead hands the
-backend a plane count that does not match the bytes, and NDI reads half a frame past the end
-of the buffer. `SenderSession::push_video` copies one plane and drops anything that is not a
-single-plane format, so that mismatch can only ever cost a frame.
+### 7.3.0 How every sender gets its frames
+
+Program, Preview, canvas senders and the Sender filter all share one mechanism,
+`SenderCapture`: an `obs_output` (`satellite_output`, or `satellite_video_output` when no
+mixer track is wanted) attached to a `video_t` and pushing into the sender's `SenderSession`.
+The session — the feed's presence on the network — and the capture have separate lifetimes.
+
+- **It has to be an output.** Only `obs_output_begin_data_capture` tells a video mix that
+  somebody wants raw frames. A callback attached with `video_output_connect` alone is never
+  called on a view's mix, because nothing asks that mix to download anything.
+- **Capture is on demand.** Producing frames is the only part of a sender that costs render
+  time: OBS reads every frame of the mix back from the GPU, and for Preview, canvas and
+  filter senders it first renders the scene or source a second time. So the capture — and
+  the view behind it — exists only while `SenderSession::wanted()` is true, meaning a
+  receiver is connected or was within the last three seconds. The send thread polls the
+  connection count and reports changes; the frontend senders respond by queueing an update
+  onto the UI thread, the filter on its next tick. An enabled sender nobody is receiving
+  costs the render thread nothing, and its first frame follows a receiver's arrival by a
+  few hundred milliseconds.
+- **No pixel conversion where OBS's own format will do.** If the mix produces NV12 in
+  limited range with the matrix receivers will assume (BT.709 at 720 lines and up, BT.601
+  below), the frames go out exactly as OBS made them. Otherwise OBS is asked to convert to
+  UYVY, which runs on the CPU, per frame, on the video thread the mix shares with its
+  encoders. Either way the `video_t` keeps reporting its *own* format, so what was asked
+  for is what each output carries forward as the frame's description; taking the format
+  from the `video_output_info` after a conversion hands the backend a plane count that does
+  not match the bytes.
+- **`SenderSession::push_video` copies one contiguous buffer** — a single plane, or NV12's
+  luma with its chroma packed straight after at the luma's stride, which is the layout both
+  runtimes read — and drops any format it cannot describe that way, so a mismatch can only
+  ever cost a frame.
 
 ### 7.3.1 Canvas senders
 
@@ -276,7 +305,8 @@ each naming a canvas, a sender name, a protocol and a mixer track. They use the 
   immediately and signals `video_reset` only *afterwards*, so an output attached to the
   old `video_t` would be stopped through freed memory. The sender instead mirrors the
   canvas's channels into its own `obs_view` at the canvas's video settings, exactly as the
-  Preview sender does for the preview scene. The cost is a second render of the canvas.
+  Preview sender does for the preview scene. The cost is a second render of the canvas,
+  paid only while the feed has a receiver.
 - **Canvas signals are deferred.** `remove`, `video_reset` and `channel_change` (and the
   global `canvas_create`, so a sender whose canvas appears late still starts) arrive on
   whatever thread changed the canvas, often under its locks. The handler only queues one

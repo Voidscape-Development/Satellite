@@ -16,6 +16,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
 
 #include <Processing.NDI.Lib.h>
@@ -215,8 +216,51 @@ int fake_recv_get_no_connections(NDIlib_recv_instance_t)
 }
 
 struct FakeSend {
-	int dummy = 0;
+	std::string name;
+	int video_frames = 0;
+	std::chrono::steady_clock::time_point last_report = std::chrono::steady_clock::now();
 };
+
+/// FAKE_NDI_CONNECTIONS_FILE names a file holding the receiver count, re-read on every call,
+/// so a harness driving a real OBS can connect and disconnect "receivers" while it runs.
+/// Without it the fake reports two receivers, as it always has.
+int fake_connection_count()
+{
+	const char *path = getenv("FAKE_NDI_CONNECTIONS_FILE");
+	if (!path)
+		return 2;
+
+	int count = 0;
+	if (FILE *file = fopen(path, "r")) {
+		if (fscanf(file, "%d", &count) != 1)
+			count = 0;
+		fclose(file);
+	}
+	return count;
+}
+
+/// FAKE_NDI_STATS_FILE gets one line per sender per second - name, frames so far, FourCC and
+/// size - which is how that same harness sees what each sender inside OBS is emitting.
+void report_video(FakeSend *send, const NDIlib_video_frame_v2_t *frame)
+{
+	const char *path = getenv("FAKE_NDI_STATS_FILE");
+	if (!path || !send)
+		return;
+
+	++send->video_frames;
+
+	const auto now = std::chrono::steady_clock::now();
+	if (now - send->last_report < std::chrono::seconds(1))
+		return;
+	send->last_report = now;
+
+	if (FILE *file = fopen(path, "a")) {
+		const uint32_t fourcc = static_cast<uint32_t>(frame->FourCC);
+		fprintf(file, "%s frames=%d fourcc=%.4s size=%dx%d stride=%d\n", send->name.c_str(), send->video_frames,
+			reinterpret_cast<const char *>(&fourcc), frame->xres, frame->yres, frame->line_stride_in_bytes);
+		fclose(file);
+	}
+}
 
 NDIlib_v6 g_lib;
 
@@ -240,6 +284,10 @@ extern "C" struct FakeSendLog {
 	int last_audio_samples;
 	int last_audio_stride;
 	int last_audio_rate;
+	/// First and last byte of an NV12 frame's chroma, read where NDI reads it: straight
+	/// after the luma, at the luma's stride. -1 for any other format.
+	int last_chroma_first;
+	int last_chroma_last;
 };
 
 namespace {
@@ -253,7 +301,10 @@ NDIlib_send_instance_t fake_send_create(const NDIlib_send_create_t *settings)
 		strncpy(g_send_log.last_name, settings->p_ndi_name, sizeof(g_send_log.last_name) - 1);
 		g_send_log.last_name[sizeof(g_send_log.last_name) - 1] = '\0';
 	}
-	return reinterpret_cast<NDIlib_send_instance_t>(new FakeSend());
+	auto *send = new FakeSend();
+	if (settings && settings->p_ndi_name)
+		send->name = settings->p_ndi_name;
+	return reinterpret_cast<NDIlib_send_instance_t>(send);
 }
 
 void fake_send_destroy(NDIlib_send_instance_t instance)
@@ -262,10 +313,12 @@ void fake_send_destroy(NDIlib_send_instance_t instance)
 	delete reinterpret_cast<FakeSend *>(instance);
 }
 
-void fake_send_send_video_v2(NDIlib_send_instance_t, const NDIlib_video_frame_v2_t *frame)
+void fake_send_send_video_v2(NDIlib_send_instance_t instance, const NDIlib_video_frame_v2_t *frame)
 {
 	if (!frame)
 		return;
+
+	report_video(reinterpret_cast<FakeSend *>(instance), frame);
 
 	// FAKE_NDI_SEND_DELAY_MS stands in for a network that cannot keep up, which is the only
 	// condition under which SenderSession's queue overflows and its drop policy runs.
@@ -281,6 +334,14 @@ void fake_send_send_video_v2(NDIlib_send_instance_t, const NDIlib_video_frame_v2
 	g_send_log.last_yres = frame->yres;
 	g_send_log.last_stride = frame->line_stride_in_bytes;
 	g_send_log.last_video_timecode = static_cast<long long>(frame->timecode);
+
+	g_send_log.last_chroma_first = -1;
+	g_send_log.last_chroma_last = -1;
+	if (frame->FourCC == NDIlib_FourCC_video_type_NV12 && frame->p_data) {
+		const size_t luma = static_cast<size_t>(frame->line_stride_in_bytes) * static_cast<size_t>(frame->yres);
+		g_send_log.last_chroma_first = frame->p_data[luma];
+		g_send_log.last_chroma_last = frame->p_data[luma + luma / 2 - 1];
+	}
 }
 
 void fake_send_send_audio_v3(NDIlib_send_instance_t, const NDIlib_audio_frame_v3_t *frame)
@@ -306,7 +367,7 @@ bool fake_send_get_tally(NDIlib_send_instance_t, NDIlib_tally_t *tally, uint32_t
 
 int fake_send_get_no_connections(NDIlib_send_instance_t, uint32_t)
 {
-	return 2;
+	return fake_connection_count();
 }
 
 } // namespace

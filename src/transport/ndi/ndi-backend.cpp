@@ -179,14 +179,25 @@ bool fill_video_frame(const NDIlib_video_frame_v2_t &source, VideoFrame &out)
 
 size_t video_frame_bytes(const NDIlib_video_frame_v2_t &frame)
 {
-	return static_cast<size_t>(frame.line_stride_in_bytes) * static_cast<size_t>(frame.yres);
+	const size_t luma = static_cast<size_t>(frame.line_stride_in_bytes) * static_cast<size_t>(frame.yres);
+
+	// The 4:2:0 formats carry half as much again in chroma after the luma plane.
+	switch (frame.FourCC) {
+	case NDIlib_FourCC_video_type_NV12:
+	case NDIlib_FourCC_video_type_I420:
+	case NDIlib_FourCC_video_type_YV12:
+		return luma + luma / 2;
+	default:
+		return luma;
+	}
 }
 
 /// The reverse of fill_video_frame, for the send path.
 ///
-/// Senders ask OBS to convert to UYVY before the frame ever reaches us, so the first case is
-/// the one that runs; the rest exist so an alpha-bearing or unconverted frame is not silently
-/// dropped.
+/// Senders hand over OBS's own NV12 where the mix produces it, and otherwise ask OBS to
+/// convert to UYVY, so those two cases are the ones that run. NDI reads an NV12 frame as one
+/// buffer - luma, then the interleaved chroma at the same stride - which is how SenderSession
+/// packs it.
 bool fourcc_for_format(video_format format, NDIlib_FourCC_video_type_e &out)
 {
 	switch (format) {

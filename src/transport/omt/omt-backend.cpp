@@ -412,8 +412,14 @@ public:
 
 		omt_frame.ColorSpace = frame.colorspace == VIDEO_CS_601 ? OMTColorSpace_BT601 : OMTColorSpace_BT709;
 
+		// NV12 arrives packed into one buffer, chroma straight after the luma, so the
+		// length has to cover the chroma too or OMT is told the frame ends at the luma.
+		size_t length = static_cast<size_t>(frame.linesize[0]) * frame.height;
+		if (frame.format == VIDEO_FORMAT_NV12)
+			length += static_cast<size_t>(frame.linesize[0]) * ((frame.height + 1) / 2);
+
 		omt_frame.Data = frame.data[0];
-		omt_frame.DataLength = static_cast<int>(frame.linesize[0] * frame.height);
+		omt_frame.DataLength = static_cast<int>(length);
 
 		return api_->send(instance_, &omt_frame) >= 0;
 	}

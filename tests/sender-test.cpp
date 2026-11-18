@@ -18,6 +18,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <Processing.NDI.Lib.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -69,6 +70,8 @@ struct FakeSendLog {
 	int last_audio_samples;
 	int last_audio_stride;
 	int last_audio_rate;
+	int last_chroma_first;
+	int last_chroma_last;
 };
 
 using namespace satellite;
@@ -270,19 +273,25 @@ int main()
 
 	unsetenv("FAKE_NDI_SEND_DELAY_MS");
 
-	printf("== session queue, multi-plane frame ==\n");
+	printf("== session queue, planar frames ==\n");
 	video_before = log->video_frames;
 
-	// The queue copies one plane, so a frame describing planes it does not carry must stop
-	// here. Letting it through is what made the NDI runtime read past the copy: it would
-	// take the UYVY buffer's stride and height for a Y plane and go looking for chroma
-	// half a frame beyond the end of it.
+	// The queue copies what it can hand a backend as one buffer: a single plane, or NV12's
+	// two. A frame describing planes the queue does not carry must stop here. Letting one
+	// through is what made the NDI runtime read past the copy: it would take the buffer's
+	// stride and height for a Y plane and go looking for chroma beyond the end of it.
 	{
 		SenderSession session;
 		check(session.start(Protocol::NDI, config), "session started for the format check");
 
-		VideoFrame planar = make_video(storage, 100000000ULL, 0x40);
-		planar.format = VIDEO_FORMAT_NV12;
+		VideoFrame mislabelled = make_video(storage, 100000000ULL, 0x40);
+		mislabelled.format = VIDEO_FORMAT_NV12; // says NV12, carries no second plane
+		session.push_video(mislabelled);
+
+		VideoFrame planar = make_video(storage, 150000000ULL, 0x40);
+		planar.format = VIDEO_FORMAT_I420;
+		planar.data[1] = planar.data[2] = storage.data();
+		planar.linesize[1] = planar.linesize[2] = kWidth / 2;
 		session.push_video(planar);
 
 		VideoFrame packed = make_video(storage, 200000000ULL, 0x41);
@@ -290,11 +299,96 @@ int main()
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-		check(log->video_frames - video_before == 1, "planar frame dropped, packed frame still sent");
+		check(log->video_frames - video_before == 1, "unsendable frames dropped, packed frame still sent");
 		check(log->last_fourcc == NDI_LIB_FOURCC('U', 'Y', 'V', 'Y'),
 		      "only the UYVY frame reached the runtime");
 
+		// NV12 is what OBS produces by default, and goes out as it is. OBS hands over
+		// two separate planes; NDI reads one buffer with the chroma straight after the
+		// luma at the luma's stride, so the queue has to pack it that way - here from a
+		// chroma plane whose rows are padded wider than the luma's.
+		const uint32_t chroma_stride = kWidth + 64;
+		std::vector<uint8_t> luma(static_cast<size_t>(kWidth) * kHeight, 0x10);
+		std::vector<uint8_t> chroma(static_cast<size_t>(chroma_stride) * (kHeight / 2), 0xEE);
+		for (uint32_t row = 0; row < kHeight / 2; ++row)
+			memset(chroma.data() + static_cast<size_t>(chroma_stride) * row, 0x80 + (row == 0 ? 1 : 0),
+			       kWidth);
+		chroma[static_cast<size_t>(chroma_stride) * (kHeight / 2 - 1) + kWidth - 1] = 0x7F;
+
+		VideoFrame nv12 = {};
+		nv12.width = kWidth;
+		nv12.height = kHeight;
+		nv12.format = VIDEO_FORMAT_NV12;
+		nv12.framerate_num = 60000;
+		nv12.framerate_den = 1001;
+		nv12.timestamp_ns = 300000000ULL;
+		nv12.data[0] = luma.data();
+		nv12.linesize[0] = kWidth;
+		nv12.data[1] = chroma.data();
+		nv12.linesize[1] = chroma_stride;
+		session.push_video(nv12);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+		check(log->video_frames - video_before == 2, "NV12 frame sent without conversion");
+		check(log->last_fourcc == NDI_LIB_FOURCC('N', 'V', '1', '2'), "it reached the runtime as NV12");
+		check(log->last_stride == static_cast<int>(kWidth), "with the luma's stride");
+		check(log->last_chroma_first == 0x81, "chroma starts straight after the luma");
+		check(log->last_chroma_last == 0x7F, "chroma rows repacked to the luma's stride, padding dropped");
+
 		session.stop();
+	}
+
+	printf("== session demand ==\n");
+
+	// A session is only "wanted" while somebody is receiving it. That is what lets its
+	// owner stop capturing - and stop costing OBS a readback of every frame, or a whole
+	// extra render - for a feed nobody is watching.
+	{
+		const std::string connections_path =
+			std::string(getenv("NDI_RUNTIME_DIR_V6") ? getenv("NDI_RUNTIME_DIR_V6") : ".") + "/connections";
+		const auto set_connections = [&](int count) {
+			FILE *file = fopen(connections_path.c_str(), "w");
+			if (file) {
+				fprintf(file, "%d\n", count);
+				fclose(file);
+			}
+		};
+		const auto wait_for = [](const SenderSession &session, bool wanted, int timeout_ms) {
+			for (int waited = 0; waited < timeout_ms && session.wanted() != wanted; waited += 20)
+				std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			return session.wanted() == wanted;
+		};
+
+		set_connections(0);
+		setenv("FAKE_NDI_CONNECTIONS_FILE", connections_path.c_str(), 1);
+
+		std::atomic<int> changes{0};
+
+		SenderSession session;
+		check(session.start(Protocol::NDI, config, [&changes] { ++changes; }),
+		      "session started with no receivers");
+		check(!session.wanted(), "not wanted before anyone connects");
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+		check(!session.wanted() && changes.load() == 0, "still not wanted, and no change reported");
+
+		set_connections(1);
+		check(wait_for(session, true, 1000), "wanted once a receiver connects");
+		check(changes.load() == 1, "the change was reported once");
+
+		set_connections(0);
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		check(session.wanted(), "still wanted just after the receiver leaves");
+
+		check(wait_for(session, false, 4000), "no longer wanted once it has stayed away");
+		check(changes.load() == 2, "and that change was reported too");
+
+		session.stop();
+		check(!session.wanted(), "not wanted after stop");
+
+		unsetenv("FAKE_NDI_CONNECTIONS_FILE");
+		remove(connections_path.c_str());
 	}
 
 	unregister_backends();
