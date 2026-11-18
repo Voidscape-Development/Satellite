@@ -995,14 +995,12 @@ void SatelliteDock::refreshSenders()
 		for (CanvasSenderControls *controls : canvasControls_)
 			controls->setCanvases(canvases);
 
-		if (!canvases_supported())
-			canvasHint_->setText(text("Satellite.Canvas.Unsupported"));
-		else if (canvases.empty())
+		if (canvases.empty())
 			canvasHint_->setText(text("Satellite.Canvas.None"));
 		else
 			canvasHint_->setText(text("Satellite.Canvas.Hint"));
 
-		addCanvas_->setEnabled(canvases_supported() && !canvases.empty());
+		addCanvas_->setEnabled(!canvases.empty());
 	}
 }
 

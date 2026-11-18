@@ -8,7 +8,7 @@ also package it, producing the installers and archives the OBS plugin template d
 | Platform | Artifact | Contents |
 |---|---|---|
 | Windows | `satellite-<version>-windows-x64.zip` and an NSIS installer | `satellite.dll`, `libomt.dll`, `libvmx.dll`, `data/` |
-| Linux | `.deb` and a tarball | `satellite.so`, `libomt.so`, `libvmx.so` under `obs-plugins`, `data/` under `share/obs` |
+| Linux | `.deb` and a tarball | `satellite.so`, `libomt.so`, `libvmx.so` under `obs-modules/plugins`, `data/` under `share/obs` |
 | macOS | `satellite-<version>-macos-universal.pkg` | `satellite.plugin`, with both OMT libraries inside `Contents/Frameworks` |
 
 The OMT libraries are built from source by `build-aux/build-omt` before the plugin is
@@ -78,10 +78,9 @@ These are all real, and each cost a CI round trip to find:
 - **No semicolons in `buildspec.json`.** `cmake/common/bootstrap.cmake` passes the file to
   `string(JSON ...)` unquoted, so a semicolon anywhere splits it into a CMake list and every
   lookup in it fails with a confusing `VERSION "NOTFOUND"` error.
-- **CI builds against OBS 31.1.1, not your system libobs.** Distributions still package
-  30.x, so a plugin that compiles locally can fail CI on APIs deprecated in between — with
-  `-Werror`, a deprecation *is* a build failure. `src/obs/obs-compat.hpp` wraps the calls
-  that differ so both versions build.
+- **CI builds against OBS 33, not your system libobs.** Distributions may package an older
+  libobs, so a plugin that compiles locally can fail CI on APIs deprecated in between — with
+  `-Werror`, a deprecation *is* a build failure.
 - **Nested macOS libraries go in `Contents/Frameworks`.** codesign treats that directory as
   nested code and signs it; loose Mach-O binaries next to the main executable in
   `Contents/MacOS` are treated as resources instead, and sealing the bundle fails. They are

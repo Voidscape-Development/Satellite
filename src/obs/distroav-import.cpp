@@ -19,7 +19,6 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "obs/distroav-import.hpp"
 
 #include "config/config.hpp"
-#include "obs/obs-compat.hpp"
 #include "transport/transport.hpp"
 
 #include <cstring>
@@ -138,7 +137,7 @@ bool scan_source(void *param, obs_source_t *source)
 
 void scan_outputs(std::vector<ImportItem> *items)
 {
-	config_t *config = obs_user_config();
+	config_t *config = obs_frontend_get_user_config();
 	if (!config)
 		return;
 
@@ -225,11 +224,11 @@ bool mirror_in_scene(void *param, obs_source_t *scene_source)
 				return true;
 
 			obs_transform_info transform = {};
-			sceneitem_get_transform(item, &transform);
+			obs_sceneitem_get_info2(item, &transform);
 
 			obs_sceneitem_t *added = obs_scene_add(inner->scene, inner->outer->replacement);
 			if (added) {
-				sceneitem_set_transform(added, &transform);
+				obs_sceneitem_set_info2(added, &transform);
 				obs_sceneitem_set_visible(added, obs_sceneitem_visible(item));
 				++inner->outer->placements;
 			}

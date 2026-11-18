@@ -316,8 +316,6 @@ each naming a canvas, a sender name, a protocol and a mixer track. They use the 
   sender has a stable id of its own, so editing or removing one never restarts another.
 - **Audio.** Canvases have no audio of their own — OBS mixes audio globally — so a canvas
   sender carries one of the six mixer tracks (`obs_output_set_mixer`), or none.
-- **Older OBS.** Against a libobs before 31.1 the canvas code compiles out
-  (`SATELLITE_HAVE_CANVASES`) and the Satellite window says why canvases are unavailable.
 
 ### 7.4 Tally
 
