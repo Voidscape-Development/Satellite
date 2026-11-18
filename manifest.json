@@ -1,0 +1,18 @@
+{
+    "display_name": "Satellite",
+    "id": "d84b6dd9-7b93-45f6-aa1f-02d148ccf186",
+    "version": "0.1.0",
+    "authors": [
+        "Voidscape Development"
+    ],
+    "name": "satellite",
+    "description": "An OBS Studio plugin that carries video, audio, metadata and tally between OBS and other machines on a local network, over either NDI or OMT (Open Media Transport), behind one shared set of OBS source/filter/output types and one management window.",
+    "long_description": "An OBS Studio plugin that carries video, audio, metadata and tally between OBS and other machines on a local network, over either NDI or OMT (Open Media Transport), behind one shared set of OBS source/filter/output types and one management window.",
+    "urls": {
+        "repository": "https://github.com/Voidscape-Development/Satellite",
+        "website": "https://github.com/Voidscape-Development/Satellite",
+        "support": "https://github.com/Voidscape-Development/Satellite/issues"
+    },
+    "has_banner": false,
+    "has_icon": false
+}

@@ -7,8 +7,8 @@ also package it, producing the installers and archives the OBS plugin template d
 
 | Platform | Artifact | Contents |
 |---|---|---|
-| Windows | `satellite-<version>-windows-x64.zip` and an NSIS installer | `satellite.dll`, `libomt.dll`, `libvmx.dll`, `data/` |
-| Linux | `.deb` and a tarball | `satellite.so`, `libomt.so`, `libvmx.so` under `obs-plugins`, `data/` under `share/obs` |
+| Windows | `satellite-<version>-windows-x64.zip` and an NSIS installer (OBS 33+ layout), plus `-windows-legacy-x64.zip` and `-windows-portable-legacy-x64.zip` for older OBS | `satellite.dll`, `libomt.dll`, `libvmx.dll`, `data/` |
+| Linux | `.deb` and a tarball, plus `-legacy` variants for OBS 32 and earlier | `satellite.so`, `libomt.so`, `libvmx.so` under `obs-modules/plugins` (`obs-plugins` in the legacy packages), `data/` under `share/obs` |
 | macOS | `satellite-<version>-macos-universal.pkg` | `satellite.plugin`, with both OMT libraries inside `Contents/Frameworks` |
 
 The OMT libraries are built from source by `build-aux/build-omt` before the plugin is
