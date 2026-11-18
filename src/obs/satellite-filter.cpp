@@ -18,9 +18,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "obs/satellite-filter.hpp"
 
+#include "obs/satellite-output.hpp"
 #include "obs/sender-session.hpp"
 #include "transport/transport.hpp"
 
+#include <mutex>
 #include <string>
 
 #include <obs-module.h>
@@ -35,18 +37,30 @@ constexpr const char *kSettingName = "name";
 constexpr const char *kSettingQuality = "quality";
 constexpr const char *kSettingAudio = "send_audio";
 
+/// How long to leave a sender that could not start before trying again. The retry runs from
+/// the tick, and a missing runtime would otherwise be retried, and logged, at frame rate.
+constexpr float kRetrySeconds = 2.0f;
+
 /// Publishes the source it is attached to, over the selected protocol.
 ///
 /// It does not intercept frames with filter_video. That would only ever see async sources -
 /// a camera or a media file - and would miss everything OBS renders, which is most of what
 /// people actually want to send: game capture, browser sources, whole scenes. Instead the
-/// parent is rendered into a view of its own and the frames are taken from that view's
-/// output, which works for every source type.
+/// parent is rendered into a view of its own, the size of the source, and the frames are
+/// taken from that view's output, which works for every source type.
+///
+/// That view is a second render of the source and a GPU readback of every frame, so it
+/// exists only while somebody is receiving the feed. The sender itself - the feed's name on
+/// the network - is up for as long as the filter is.
 ///
 /// Audio comes from an audio capture callback on the parent, so the feed carries that
 /// source's own sound rather than the program mix.
 struct FilterContext {
 	obs_source_t *filter = nullptr;
+
+	/// update() and destroy() arrive on the UI thread, the tick on the graphics thread, and
+	/// both start and stop things. Everything below is guarded by this.
+	std::mutex mutex;
 
 	Protocol protocol = Protocol::NDI;
 	std::string name;
@@ -54,48 +68,24 @@ struct FilterContext {
 	bool send_audio = true;
 
 	SenderSession session;
-
-	obs_view_t *view = nullptr;
-	video_t *view_video = nullptr;
-	/// What start_sending asked the view's output to convert to, which is what
-	/// on_view_video then receives. The view's own info still reports the unconverted
-	/// format, so this is the only description of the bytes that arrive.
-	video_scale_info conversion = {};
 	obs_source_t *captured_audio_source = nullptr;
-	bool connected = false;
+
+	SenderCapture capture;
+	obs_view_t *view = nullptr;
+	uint32_t width = 0;
+	uint32_t height = 0;
+
+	/// Seconds until the next attempt to start whatever last failed to.
+	float retry_in = 0.0f;
 };
-
-void on_view_video(void *param, video_data *frame)
-{
-	auto *context = static_cast<FilterContext *>(param);
-	if (!context->view_video)
-		return;
-
-	const video_output_info *info = video_output_get_info(context->view_video);
-	const video_scale_info &conversion = context->conversion;
-
-	// The conversion, not the view's own info, is what describes data[0]: OBS has already
-	// converted the frame by the time it lands here. Describing a UYVY buffer with the
-	// view's format (NV12 by default) would send the backend looking for a second plane.
-	VideoFrame video = {};
-	video.width = conversion.width;
-	video.height = conversion.height;
-	video.format = conversion.format;
-	video.colorspace = conversion.colorspace;
-	video.range = conversion.range;
-	video.framerate_num = info->fps_num;
-	video.framerate_den = info->fps_den;
-	video.timestamp_ns = frame->timestamp;
-	video.data[0] = frame->data[0];
-	video.linesize[0] = frame->linesize[0];
-
-	context->session.push_video(video);
-}
 
 void on_source_audio(void *param, obs_source_t *, const audio_data *data, bool muted)
 {
 	auto *context = static_cast<FilterContext *>(param);
-	if (muted || !context->send_audio)
+
+	// send_audio is not read here: the callback is only registered when it is set, and
+	// this runs on the audio thread, outside the lock.
+	if (muted)
 		return;
 
 	const audio_t *audio = obs_get_audio();
@@ -116,12 +106,25 @@ void on_source_audio(void *param, obs_source_t *, const audio_data *data, bool m
 	context->session.push_audio(frame);
 }
 
+void stop_capture(FilterContext *context)
+{
+	// The output first: it holds the view's video_t until it has stopped.
+	context->capture.stop();
+
+	if (context->view) {
+		obs_view_set_source(context->view, 0, nullptr);
+		obs_view_remove(context->view);
+		obs_view_destroy(context->view);
+		context->view = nullptr;
+	}
+
+	context->width = 0;
+	context->height = 0;
+}
+
 void stop_sending(FilterContext *context)
 {
-	if (context->connected && context->view_video) {
-		video_output_disconnect(context->view_video, on_view_video, context);
-		context->connected = false;
-	}
+	stop_capture(context);
 
 	if (context->captured_audio_source) {
 		obs_source_remove_audio_capture_callback(context->captured_audio_source, on_source_audio, context);
@@ -129,71 +132,73 @@ void stop_sending(FilterContext *context)
 		context->captured_audio_source = nullptr;
 	}
 
-	if (context->view) {
-		obs_view_set_source(context->view, 0, nullptr);
-		obs_view_remove(context->view);
-		obs_view_destroy(context->view);
-		context->view = nullptr;
-		context->view_video = nullptr;
-	}
-
 	context->session.stop();
 }
 
-void start_sending(FilterContext *context)
+/// Puts the feed on the network. No frames flow until sync_capture finds a receiver.
+bool start_sending(FilterContext *context, obs_source_t *parent)
 {
-	if (context->name.empty())
-		return;
-
-	// Only valid once the filter has actually been attached, which is why starting is
-	// deferred to the first tick rather than done in update().
-	obs_source_t *parent = obs_filter_get_parent(context->filter);
-	if (!parent)
-		return;
-
 	SenderConfig config;
 	config.name = context->name;
 	config.quality = context->quality;
 	config.send_audio = context->send_audio;
 
 	if (!context->session.start(context->protocol, config))
-		return;
-
-	obs_video_info ovi = {};
-	if (!obs_get_video_info(&ovi)) {
-		context->session.stop();
-		return;
-	}
-
-	context->view = obs_view_create();
-	obs_view_set_source(context->view, 0, parent);
-	context->view_video = obs_view_add2(context->view, &ovi);
-
-	if (!context->view_video) {
-		stop_sending(context);
-		return;
-	}
-
-	// UYVY, so the frame reaching the backend needs no pixel conversion.
-	context->conversion = {};
-	context->conversion.format = VIDEO_FORMAT_UYVY;
-	context->conversion.width = ovi.output_width;
-	context->conversion.height = ovi.output_height;
-	context->conversion.range = VIDEO_RANGE_PARTIAL;
-	context->conversion.colorspace = ovi.output_height >= 720 ? VIDEO_CS_709 : VIDEO_CS_601;
-
-	context->connected = video_output_connect(context->view_video, &context->conversion, on_view_video, context);
-	if (!context->connected) {
-		obs_log(LOG_WARNING, "could not connect to the render output for '%s'", context->name.c_str());
-		stop_sending(context);
-		return;
-	}
+		return false;
 
 	if (context->send_audio) {
 		context->captured_audio_source = obs_source_get_ref(parent);
 		if (context->captured_audio_source)
 			obs_source_add_audio_capture_callback(context->captured_audio_source, on_source_audio, context);
 	}
+
+	return true;
+}
+
+/// Brings the capture in line with whether anybody is receiving, and with the source's size.
+bool sync_capture(FilterContext *context, obs_source_t *parent)
+{
+	// Rounded up to even: the view produces 4:2:0 video, which has no odd sizes.
+	const uint32_t width = (obs_source_get_width(parent) + 1) & ~1u;
+	const uint32_t height = (obs_source_get_height(parent) + 1) & ~1u;
+
+	// A source with no size yet - a capture still waiting for its window, say - has
+	// nothing to send, and is looked at again on the next tick.
+	if (!context->session.wanted() || width == 0 || height == 0) {
+		stop_capture(context);
+		return true;
+	}
+
+	if (context->capture.active() && width == context->width && height == context->height)
+		return true;
+
+	stop_capture(context);
+
+	// The view is the size of the source rather than of the canvas: a 720p camera on a 4K
+	// canvas is a 720p feed, and costs a 720p render and readback.
+	obs_video_info ovi = {};
+	if (!obs_get_video_info(&ovi))
+		return false;
+
+	ovi.base_width = width;
+	ovi.base_height = height;
+	ovi.output_width = width;
+	ovi.output_height = height;
+
+	context->view = obs_view_create();
+	obs_view_set_source(context->view, 0, parent);
+
+	if (!context->capture.start(obs_source_get_name(context->filter), context->session,
+				    obs_view_add2(context->view, &ovi), -1)) {
+		obs_log(LOG_WARNING, "could not capture video for '%s': %s", context->name.c_str(),
+			context->capture.error().c_str());
+		stop_capture(context);
+		return false;
+	}
+
+	context->width = width;
+	context->height = height;
+	return true;
 }
 
 const char *filter_get_name(void *)
@@ -213,6 +218,8 @@ void filter_update(void *data, obs_data_t *settings)
 
 	const char *name = obs_data_get_string(settings, kSettingName);
 
+	std::lock_guard<std::mutex> lock(context->mutex);
+
 	stop_sending(context);
 
 	context->protocol = protocol;
@@ -220,7 +227,9 @@ void filter_update(void *data, obs_data_t *settings)
 	context->quality = quality;
 	context->send_audio = obs_data_get_bool(settings, kSettingAudio);
 
-	start_sending(context);
+	// Starting is left to the next tick: the parent is not attached yet when this runs
+	// from create().
+	context->retry_in = 0.0f;
 }
 
 void *filter_create(obs_data_t *settings, obs_source_t *filter)
@@ -235,18 +244,42 @@ void *filter_create(obs_data_t *settings, obs_source_t *filter)
 void filter_destroy(void *data)
 {
 	auto *context = static_cast<FilterContext *>(data);
-	stop_sending(context);
+	{
+		std::lock_guard<std::mutex> lock(context->mutex);
+		stop_sending(context);
+	}
 	delete context;
 }
 
-void filter_tick(void *data, float)
+void filter_tick(void *data, float seconds)
 {
 	auto *context = static_cast<FilterContext *>(data);
 
-	// The parent is not attached yet when create() runs, so the first tick is the earliest
-	// point at which the view can be built.
-	if (!context->session.running() && !context->name.empty())
-		start_sending(context);
+	// If the UI thread is in the middle of an update, this tick has nothing to add - and
+	// the render thread never waits on it.
+	std::unique_lock<std::mutex> lock(context->mutex, std::try_to_lock);
+	if (!lock.owns_lock() || context->name.empty())
+		return;
+
+	if (context->retry_in > 0.0f) {
+		context->retry_in -= seconds;
+		return;
+	}
+
+	obs_source_t *parent = obs_filter_get_parent(context->filter);
+	if (!parent)
+		return;
+
+	// The view holds a reference to the source it renders. Once the source has been
+	// removed that reference is the only thing keeping it - and this filter - alive.
+	if (obs_source_removed(parent)) {
+		stop_sending(context);
+		return;
+	}
+
+	const bool ok = (context->session.running() || start_sending(context, parent)) && sync_capture(context, parent);
+	if (!ok)
+		context->retry_in = kRetrySeconds;
 }
 
 /// Pass-through: the filter publishes the source on the network, it does not alter what OBS

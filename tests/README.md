@@ -57,6 +57,12 @@ it. Nothing about either load path is mocked:
     rather than buffered into a growing backlog, the drops are counted for the dock, and
     **audio is never dropped**, because a gap in sound is far more noticeable than a
     skipped frame
+- NV12 — what OBS produces by default — goes out unconverted, with its chroma packed
+  straight after the luma at the luma's stride, and formats the queue cannot carry are
+  dropped rather than misdescribed
+- **Demand**: a session is not `wanted()` until a receiver connects, stays wanted for a
+  moment after the last one leaves, and reports each change exactly once
+  (`FAKE_NDI_CONNECTIONS_FILE` lets the test change the fake's receiver count while it runs)
 - Frames are copied out of the caller's buffer, so what the send thread emits does not
   depend on memory the pusher has since reused
 - The feed appears in the registry as a sender while running and is gone after stop

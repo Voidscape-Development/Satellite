@@ -25,6 +25,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,6 +41,11 @@ namespace satellite {
 /// Frames arrive on OBS's own threads - the video output thread for video, the audio thread
 /// for audio - and those must not block. So push_video/push_audio only copy into a bounded
 /// queue and return; everything that can stall on the network happens on the send thread.
+///
+/// A session also says whether anybody is receiving it - wanted(). Producing frames costs
+/// OBS a GPU readback per frame, and for most senders a whole extra render of the scene, so
+/// the owners only capture while that is true: a sender nobody is watching is advertised on
+/// the network and costs nothing else.
 class SenderSession {
 public:
 	SenderSession() = default;
@@ -47,11 +54,20 @@ public:
 	SenderSession(const SenderSession &) = delete;
 	SenderSession &operator=(const SenderSession &) = delete;
 
-	bool start(Protocol protocol, const SenderConfig &config);
+	/// on_demand_changed, if given, is called from the send thread each time wanted()
+	/// changes. It must not block and must not call back into this session's start/stop.
+	bool start(Protocol protocol, const SenderConfig &config, std::function<void()> on_demand_changed = {});
 	void stop();
 	bool running() const { return running_.load(std::memory_order_acquire); }
 
-	/// Copies one single-plane video frame into the queue. Safe on any thread.
+	/// Whether frames are worth producing: a receiver is connected, or one was a moment
+	/// ago. False from start() until the first receiver appears. Safe on any thread.
+	bool wanted() const { return wanted_.load(std::memory_order_acquire); }
+
+	/// Whether push_video can carry this format: any single-plane format, or NV12.
+	static bool can_send(video_format format);
+
+	/// Copies one video frame into the queue. Safe on any thread.
 	void push_video(const VideoFrame &frame);
 	/// Copies one planar-float audio frame into the queue. Safe on any thread.
 	void push_audio(const AudioFrame &frame);
@@ -78,6 +94,8 @@ private:
 
 	std::thread thread_;
 	std::atomic<bool> running_{false};
+	std::atomic<bool> wanted_{false};
+	std::function<void()> on_demand_changed_;
 
 	mutable std::mutex mutex_;
 	std::condition_variable wake_;

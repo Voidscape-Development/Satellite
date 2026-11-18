@@ -27,6 +27,9 @@ plugin.
 - **Satellite Sender** — a filter that publishes any source on the network. It renders the
   source through a view of its own rather than intercepting async frames, so it works on
   game capture, browser sources and scenes, not just cameras and media files
+- **Senders that cost nothing until someone is watching** — a sender is on the network as
+  soon as it is enabled, but OBS only renders and reads back frames for it while a receiver
+  is connected, and hands them over in its own format with no extra conversion
 - **Program and Preview outputs** — independently configurable from the Satellite window;
   Preview runs only while Studio Mode is active
 - **Canvas senders** — on OBS 31.1 and later, send any additional canvas (a vertical canvas
