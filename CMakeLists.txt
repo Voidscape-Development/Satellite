@@ -8,7 +8,7 @@ project(${_name} VERSION ${_version})
 # and Qt (the Satellite window). Both default ON here, unlike the upstream template.
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
 option(ENABLE_QT "Use Qt functionality" ON)
-option(ENABLE_BUILD_LEGACY "Enable legacy build" ON)
+option(ENABLE_BUILD_LEGACY "Enable legacy build" OFF)
 
 include(compilerconfig)
 include(defaults)
@@ -78,7 +78,6 @@ target_sources(
     src/obs/satellite-output.hpp
     src/obs/distroav-import.cpp
     src/obs/distroav-import.hpp
-    src/obs/obs-compat.hpp
     src/obs/satellite-source.cpp
     src/obs/satellite-source.hpp
     src/obs/sender-session.cpp
@@ -141,14 +140,9 @@ list(LENGTH _omt_libs _omt_libs_count)
 if(_omt_found_count EQUAL _omt_libs_count)
   message(STATUS "Satellite: bundling the OMT libraries from ${SATELLITE_OMT_LIBS_DIR}")
 
-  # libomt is looked up next to the plugin binary, so it follows every layout the
-  # plugin itself is installed into (see cmake/<platform>/helpers.cmake).
+  # libomt is looked up next to the plugin binary (see cmake/<platform>/helpers.cmake).
   if(OS_WINDOWS)
     install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}")
-    if(ENABLE_BUILD_LEGACY)
-      install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}_legacy/${CMAKE_PROJECT_NAME}/bin/64bit")
-      install(FILES ${_omt_found} DESTINATION "${CMAKE_PROJECT_NAME}_portable_legacy/obs-plugins/64bit")
-    endif()
   elseif(OS_MACOS)
     # Contents/Frameworks, not Contents/MacOS. codesign treats a bundle's Frameworks
     # directory as nested code and signs what it finds there; loose Mach-O binaries beside
@@ -158,9 +152,6 @@ if(_omt_found_count EQUAL _omt_libs_count)
     set_source_files_properties(${_omt_found} PROPERTIES MACOSX_PACKAGE_LOCATION Frameworks)
   else()
     install(FILES ${_omt_found} DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-modules/plugins COMPONENT Modern)
-    if(ENABLE_BUILD_LEGACY)
-      install(FILES ${_omt_found} DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins COMPONENT Legacy)
-    endif()
   endif()
 else()
   message(

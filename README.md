@@ -32,7 +32,7 @@ plugin.
   is connected, and hands them over in its own format with no extra conversion
 - **Program and Preview outputs** — independently configurable from the Satellite window;
   Preview runs only while Studio Mode is active
-- **Canvas senders** — on OBS 31.1 and later, send any additional canvas (a vertical canvas
+- **Canvas senders** — send any additional canvas (a vertical canvas
   from Aitum Vertical, say) as its own feed, with its choice of mixer track for audio
 - **Full bidirectional tally** — your sources tell remote senders when they are live here,
   and your senders show whether someone downstream has you on air

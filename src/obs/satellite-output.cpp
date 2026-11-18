@@ -19,7 +19,6 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "obs/satellite-output.hpp"
 
 #include "config/config.hpp"
-#include "obs/obs-compat.hpp"
 #include "obs/sender-session.hpp"
 #include "transport/transport.hpp"
 
@@ -406,8 +405,6 @@ private:
 FrontendSender g_program(false);
 FrontendSender g_preview(true);
 
-#if SATELLITE_HAVE_CANVASES
-
 bool g_canvas_signals_connected = false;
 
 void on_canvas_signal(void *, calldata_t *)
@@ -691,8 +688,6 @@ void shutdown_canvas_senders()
 	g_canvas_senders.clear();
 }
 
-#endif
-
 } // namespace
 
 void register_satellite_output()
@@ -779,9 +774,7 @@ void update_frontend_outputs()
 	// The Preview sender is meaningless outside Studio Mode, so it only runs there.
 	g_preview.apply(config.preview, obs_frontend_preview_program_mode_active());
 
-#if SATELLITE_HAVE_CANVASES
 	update_canvas_senders(config.canvas_senders);
-#endif
 }
 
 void shutdown_frontend_outputs()
@@ -791,9 +784,7 @@ void shutdown_frontend_outputs()
 	g_program.stop();
 	g_preview.stop();
 
-#if SATELLITE_HAVE_CANVASES
 	shutdown_canvas_senders();
-#endif
 }
 
 SenderStatus program_sender_status()
@@ -808,26 +799,16 @@ SenderStatus preview_sender_status()
 
 SenderStatus canvas_sender_status(int id)
 {
-#if SATELLITE_HAVE_CANVASES
 	const auto it = g_canvas_senders.find(id);
 	if (it != g_canvas_senders.end())
 		return it->second->status();
-#else
-	(void)id;
-#endif
 	return {};
-}
-
-bool canvases_supported()
-{
-	return SATELLITE_HAVE_CANVASES != 0;
 }
 
 std::vector<CanvasInfo> list_canvases()
 {
 	std::vector<CanvasInfo> canvases;
 
-#if SATELLITE_HAVE_CANVASES
 	obs_enum_canvases(
 		[](void *param, obs_canvas_t *canvas) {
 			if (!sendable_canvas(canvas))
@@ -848,7 +829,6 @@ std::vector<CanvasInfo> list_canvases()
 			return true;
 		},
 		&canvases);
-#endif
 
 	return canvases;
 }

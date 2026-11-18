@@ -100,9 +100,6 @@ struct CanvasInfo {
 	uint32_t height = 0;
 };
 
-/// False when Satellite was built against a libobs without canvas support (before 31.1).
-bool canvases_supported();
-
 /// Every canvas other than the main one that currently has video. The main canvas is what
 /// the Program sender already carries.
 std::vector<CanvasInfo> list_canvases();
