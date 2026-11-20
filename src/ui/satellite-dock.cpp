@@ -1041,6 +1041,27 @@ void register_satellite_dock()
 	obs_frontend_add_tools_menu_item(obs_module_text("Satellite.Menu"), on_tools_menu_clicked, nullptr);
 }
 
+void maybe_show_ndi_runtime_notice()
+{
+	Config &config = Config::instance();
+	const IBackend *ndi = backend_for(Protocol::NDI);
+	if (config.ndi_runtime_notice_hidden || !ndi || ndi->available())
+		return;
+
+	QMessageBox box(QMessageBox::Warning, text("Satellite.NdiNotice.Title"),
+			text("Satellite.NdiNotice.Text").arg(QString::fromStdString(ndi->install_url())),
+			QMessageBox::Ok, static_cast<QWidget *>(obs_frontend_get_main_window()));
+	box.setTextFormat(Qt::RichText);
+	box.setTextInteractionFlags(Qt::TextBrowserInteraction);
+	box.setCheckBox(new QCheckBox(text("Satellite.NdiNotice.DontShow"), &box));
+	box.exec();
+
+	if (box.checkBox()->isChecked()) {
+		config.ndi_runtime_notice_hidden = true;
+		config.save();
+	}
+}
+
 void unregister_satellite_dock()
 {
 	// The frontend owns the dock widget once it has been registered, so this only drops our

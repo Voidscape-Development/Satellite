@@ -75,6 +75,9 @@ struct Config {
 	/// Set once the DistroAV import has been offered, so the user is not asked again.
 	bool distroav_import_offered = false;
 
+	/// Set when the user ticks "don't show again" on the startup missing-NDI-runtime notice.
+	bool ndi_runtime_notice_hidden = false;
+
 	/// Satellite window state: the tab last shown, and the feed columns the user has
 	/// turned off, as a comma-separated list of column keys.
 	int dock_tab = 0;

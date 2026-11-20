@@ -43,6 +43,7 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 		// obs_module_load().
 		satellite::register_satellite_dock();
 		satellite::update_frontend_outputs();
+		satellite::maybe_show_ndi_runtime_notice();
 
 		// Offered once, and only when there is actually a DistroAV setup to convert. The
 		// scene collection has to be loaded for the scan to see anything, which is why it
