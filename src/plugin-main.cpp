@@ -41,9 +41,10 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		// The dock needs the main window to exist, so it is created here rather than in
 		// obs_module_load().
+		// Before the dock, so its "warn at startup" toggle reads the answer given here.
+		satellite::maybe_show_ndi_runtime_notice();
 		satellite::register_satellite_dock();
 		satellite::update_frontend_outputs();
-		satellite::maybe_show_ndi_runtime_notice();
 
 		// Offered once, and only when there is actually a DistroAV setup to convert. The
 		// scene collection has to be loaded for the scan to see anything, which is why it

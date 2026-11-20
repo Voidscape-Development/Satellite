@@ -769,6 +769,14 @@ QWidget *SatelliteDock::buildSettingsTab()
 	runtimes_layout->addWidget(ndiDetail_);
 	runtimes_layout->addWidget(omtDetail_);
 	runtimes_layout->addLayout(recheck_row);
+
+	auto *ndi_notice = new QCheckBox(text("Satellite.NdiNotice.Toggle"), runtimes);
+	ndi_notice->setChecked(!config.ndi_runtime_notice_hidden);
+	connect(ndi_notice, &QCheckBox::toggled, this, [](bool on) {
+		Config::instance().ndi_runtime_notice_hidden = !on;
+		Config::instance().save();
+	});
+	runtimes_layout->addWidget(ndi_notice);
 	layout->addWidget(runtimes);
 
 	// Network
