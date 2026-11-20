@@ -200,6 +200,7 @@ void Config::load()
 	ndi_groups = groups ? groups : "";
 
 	distroav_import_offered = obs_data_get_bool(data, "distroav_import_offered");
+	ndi_runtime_notice_hidden = obs_data_get_bool(data, "ndi_runtime_notice_hidden");
 
 	dock_tab = static_cast<int>(obs_data_get_int(data, "dock_tab"));
 	const char *hidden_columns = obs_data_get_string(data, "feed_hidden_columns");
@@ -231,6 +232,7 @@ void Config::save() const
 	obs_data_set_int(data, "omt_port_end", omt_port_end);
 	obs_data_set_string(data, "ndi_groups", ndi_groups.c_str());
 	obs_data_set_bool(data, "distroav_import_offered", distroav_import_offered);
+	obs_data_set_bool(data, "ndi_runtime_notice_hidden", ndi_runtime_notice_hidden);
 	obs_data_set_int(data, "dock_tab", dock_tab);
 	obs_data_set_string(data, "feed_hidden_columns", feed_hidden_columns.c_str());
 

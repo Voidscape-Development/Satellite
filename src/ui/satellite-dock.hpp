@@ -189,6 +189,9 @@ private:
 /// shows and raises it.
 void register_satellite_dock();
 
+/// Tells the user at startup that the NDI runtime is missing, unless they opted out.
+void maybe_show_ndi_runtime_notice();
+
 /// Drops references held by the dock. Called on frontend exit.
 void unregister_satellite_dock();
 
