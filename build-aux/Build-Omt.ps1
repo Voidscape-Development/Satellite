@@ -77,11 +77,13 @@ Write-Host '==> building libvmx'
 # -Wno-c++11-narrowing: libvmx initialises byte arrays from negative literals, which older
 # clang only warned about and current clang rejects. Upstream's own script has no such flag
 # and does not compile as-is with clang 18+.
+# _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH: newer MSVC STLs (14.52+) refuse to build with a
+# clang older than the one they ship for (STL1000), and runner images can pair the two.
 $vmxSrc = Join-Path $WorkDir 'libvmx/src'
 $vmxDef = Join-Path $WorkDir 'libvmx/exports.def'
 $vmxOut = Join-Path $OutputDirectory 'libvmx.dll'
 
-& clang++ -O3 -std=c++17 -fdeclspec -mlzcnt -mavx2 -mbmi -Wno-c++11-narrowing -shared `
+& clang++ -O3 -std=c++17 -fdeclspec -mlzcnt -mavx2 -mbmi -Wno-c++11-narrowing -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -shared `
     "-Wl,/DEF:$vmxDef" `
     (Join-Path $vmxSrc 'vmxcodec_x86.cpp') `
     (Join-Path $vmxSrc 'vmxcodec_avx2.cpp') `
